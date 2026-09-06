@@ -1,0 +1,4 @@
+url=https://github.com/upvalue/orca.git
+commit=35938cc8aa328853333bd171d474c300b4c09251
+license=UNLICENSED
+installed_by=install.ps1

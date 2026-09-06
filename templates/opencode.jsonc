@@ -1,0 +1,60 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "nan/glm5.3-flash",
+  "agent": {
+    "orchestrator": {
+      "mode": "primary",
+      "model": "nan/glm5.3-flash",
+      "description": "Technical orchestrator for planning, decomposition, verification and delegation.",
+      "prompt_file": ".opencode/agents/orchestrator.md",
+      "permission": {
+        "read": "allow",
+        "edit": "deny",
+        "bash": "allow",
+        "task": {
+          "*": "deny",
+          "executor": "allow"
+        },
+        "glob": "allow",
+        "grep": "allow",
+        "webfetch": "allow",
+        "lsp": "allow",
+        "skill": "allow"
+      }
+    },
+    "executor": {
+      "mode": "subagent",
+      "model": "nan/qwen3.6",
+      "description": "Bounded implementation executor. Writes code and tests only under orchestrator contracts.",
+      "prompt_file": ".opencode/agents/executor.md",
+      "permission": {
+        "read": "allow",
+        "edit": "allow",
+        "bash": "allow",
+        "task": "deny",
+        "glob": "allow",
+        "grep": "allow",
+        "webfetch": "deny",
+        "lsp": "allow",
+        "skill": "deny"
+      }
+    },
+    "build": {
+      "mode": "primary",
+      "disable": true
+    },
+    "plan": {
+      "mode": "primary",
+      "disable": true
+    },
+    "general": {
+      "mode": "subagent",
+      "disable": true
+    },
+    "explore": {
+      "mode": "subagent",
+      "disable": true
+    }
+  },
+  "default_agent": "orchestrator"
+}
