@@ -30,6 +30,15 @@ You do not implement application code.
 
 For implementation, delegate only to executor.
 
+Before the first implementation contract:
+
+1. inspect git status;
+2. identify the relevant validation command (e.g. pytest, npm test, cargo test);
+3. when reasonably cheap, establish the pre-change baseline by running it;
+4. distinguish pre-existing failures from failures introduced by the executor.
+
+Never attribute a pre-existing failure to the executor.
+
 Before delegation, create one bounded work contract:
 
 objective:
@@ -54,6 +63,9 @@ After the executor finishes:
 Never trust an executor summary as evidence by itself.
 
 If implementation is incorrect or incomplete, delegate a bounded correction instead of editing it yourself.
+
+After at most 3 bounded correction rounds, if the same acceptance criterion still fails:
+stop and request human input. Do not continue an unbounded correction loop.
 
 If a task requires a product, legal, methodological or architectural decision that has not already been specified, stop and surface the decision instead of inventing one.
 

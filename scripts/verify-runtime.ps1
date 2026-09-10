@@ -234,44 +234,84 @@ try {
     $outputFile = Join-Path $sandbox "smoke-output.txt"
     $openCodeFailureReason = ""
 
+    # OpenCode V1 CLI: 'opencode run [message..]' with optional flags.
+    # --prompt is a TUI flag, NOT a run flag (confirmed by opencode --help).
+    # The positional message approach is documented and used by other tools
+    # (e.g. nsoderberg/ralph-codex uses: opencode run "$(cat {prompt})").
+    $taskMessage = 'The file fixture.txt contains "INITIAL". Create a bounded work contract and delegate to executor to change it to "CHANGED_BY_EXECUTOR". Do not edit the file yourself.'
+
+    # Try multiple invocation strategies:
+    # 1. Direct: opencode run --agent orchestrator "message"
+    # 2. With --attach: opencode run --attach http://localhost:4096 --agent orchestrator "message"
+    #    (only if a server is already running)
+    # 3. With --format json: opencode run --agent orchestrator --format json "message"
+    #    (try this last; structured output may help prove delegation)
+
+    $strategies = @(
+        @{ Name = "direct";   Args = "run --agent orchestrator ""$taskMessage"""; }
+    )
+
+    # Check if a server is running for the attach strategy
     try {
-        # Run OpenCode with orchestrator agent on a simple delegation task
-        # Using --prompt to provide the message non-interactively
-        $taskMessage = 'The file fixture.txt contains "INITIAL". Create a bounded work contract and delegate to executor to change it to "CHANGED_BY_EXECUTOR". Do not edit the file yourself.'
-
-        $proc = Start-Process -FilePath "opencode" `
-            -ArgumentList "run --agent orchestrator --prompt `"$taskMessage`"" `
-            -NoNewWindow `
-            -Wait `
-            -RedirectStandardOutput $outputFile `
-            -RedirectStandardError (Join-Path $sandbox "smoke-error.txt") `
-            -PassThru `
-            -WorkingDirectory $sandbox
-
-        $exitCode = $proc.ExitCode
-        $openCodeSuccess = ($exitCode -eq 0)
-
-        # Check if output indicates successful orchestration
-        if (Test-Path $outputFile) {
-            $outputContent = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
-            if ($outputContent -and $outputContent.Length -gt 0) {
-                $hasOutput = $true
-            }
+        $checkServer = Invoke-WebRequest -Uri "http://localhost:4096/" -TimeoutSec 1 -ErrorAction Stop
+        if ($checkServer.StatusCode -eq 200) {
+            $strategies += @{ Name = "attach"; Args = "run --attach http://localhost:4096 --agent orchestrator ""$taskMessage"""; }
         }
+    } catch {}
 
-        if (-not $openCodeSuccess) {
-            $openCodeFailureReason = "OpenCode exited with code $exitCode (expected 0)"
-            if (Test-Path (Join-Path $sandbox "smoke-error.txt")) {
-                $errContent = Get-Content (Join-Path $sandbox "smoke-error.txt") -Raw -ErrorAction SilentlyContinue
-                if ($errContent -and $errContent.Length -gt 0) {
-                    $openCodeFailureReason += "; stderr: $($errContent.Substring(0, [Math]::Min(200, $errContent.Length)))"
+    # Always try --format json as well
+    $strategies += @{ Name = "json"; Args = "run --agent orchestrator --format json ""$taskMessage"""; }
+
+    foreach ($strategy in $strategies) {
+        try {
+            $proc = Start-Process -FilePath "opencode" `
+                -ArgumentList $strategy.Args `
+                -NoNewWindow `
+                -Wait `
+                -RedirectStandardOutput $outputFile `
+                -RedirectStandardError (Join-Path $sandbox ("smoke-error-{0}.txt" -f $strategy.Name)) `
+                -PassThru `
+                -WorkingDirectory $sandbox
+
+            $exitCode = $proc.ExitCode
+            $currentSuccess = ($exitCode -eq 0)
+
+            $hasOutput = $false
+            if (Test-Path $outputFile) {
+                $outputContent = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
+                if ($outputContent -and $outputContent.Length -gt 0) {
+                    $hasOutput = $true
                 }
             }
-        }
 
-    } catch {
-        $openCodeSuccess = $false
-        $openCodeFailureReason = $_.Exception.Message
+            if ($currentSuccess -and $hasOutput) {
+                $openCodeSuccess = $true
+                break
+            } else {
+                $lastFailure = "Strategy ($strategy.Name): exit=$exitCode hasOutput=$hasOutput"
+                if ($currentSuccess -and -not $hasOutput) {
+                    $lastFailure += "; output was empty"
+                }
+            }
+        } catch {
+            $lastFailure = "Strategy ($strategy.Name): $_"
+        }
+    }
+
+    if (-not $openCodeSuccess) {
+        $openCodeFailureReason = "All invocation strategies failed. Last: $lastFailure"
+        if (Test-Path (Join-Path $sandbox "smoke-error-direct.txt")) {
+            $errContent = Get-Content (Join-Path $sandbox "smoke-error-direct.txt") -Raw -ErrorAction SilentlyContinue
+            if ($errContent -and $errContent.Length -gt 0) {
+                $openCodeFailureReason += "; stderr: $($errContent.Substring(0, [Math]::Min(200, $errContent.Length)))"
+            }
+        }
+        if (Test-Path (Join-Path $sandbox "smoke-error-json.txt")) {
+            $errContent = Get-Content (Join-Path $sandbox "smoke-error-json.txt") -Raw -ErrorAction SilentlyContinue
+            if ($errContent -and $errContent.Length -gt 0) {
+                $openCodeFailureReason += "; json-stderr: $($errContent.Substring(0, [Math]::Min(200, $errContent.Length)))"
+            }
+        }
     }
 
     # Determine if the orchestration run actually succeeded
