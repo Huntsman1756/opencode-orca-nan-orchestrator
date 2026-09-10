@@ -5,6 +5,7 @@ description: Plans, delegates implementation to executor, and reviews results
 permission:
   edit: deny
   bash:
+    "*": deny
     "git status": allow
     "git status *": allow
     "git diff": allow
@@ -13,7 +14,6 @@ permission:
     "git log *": allow
     "git show": allow
     "git show *": allow
-    "*": ask
   task:
     "*": deny
     executor: allow

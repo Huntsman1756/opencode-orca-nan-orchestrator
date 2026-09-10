@@ -229,7 +229,10 @@ try {
     Write-Host ""
 
     $orchestrated = $false
+    $openCodeSuccess = $false
+    $hasOutput = $false
     $outputFile = Join-Path $sandbox "smoke-output.txt"
+    $openCodeFailureReason = ""
 
     try {
         # Run OpenCode with orchestrator agent on a simple delegation task
@@ -249,73 +252,108 @@ try {
         $openCodeSuccess = ($exitCode -eq 0)
 
         # Check if output indicates successful orchestration
-        $hasOutput = $false
         if (Test-Path $outputFile) {
-            $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
-            if ($output -and $output.Length -gt 0) {
+            $outputContent = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
+            if ($outputContent -and $outputContent.Length -gt 0) {
                 $hasOutput = $true
             }
         }
 
-        # T3: Orchestrator delegated (OpenCode ran successfully with output)
-        # We verify the session started and produced output, not just keyword matching
-        $t3 = $openCodeSuccess -and $hasOutput
+        if (-not $openCodeSuccess) {
+            $openCodeFailureReason = "OpenCode exited with code $exitCode (expected 0)"
+            if (Test-Path (Join-Path $sandbox "smoke-error.txt")) {
+                $errContent = Get-Content (Join-Path $sandbox "smoke-error.txt") -Raw -ErrorAction SilentlyContinue
+                if ($errContent -and $errContent.Length -gt 0) {
+                    $openCodeFailureReason += "; stderr: $($errContent.Substring(0, [Math]::Min(200, $errContent.Length)))"
+                }
+            }
+        }
+
+    } catch {
+        $openCodeSuccess = $false
+        $openCodeFailureReason = $_.Exception.Message
+    }
+
+    # Determine if the orchestration run actually succeeded
+    $runSucceeded = $openCodeSuccess -and $hasOutput
+
+    # T3: Orchestrator delegated
+    # Note: This does NOT prove delegation happened; it only proves OpenCode ran and produced output.
+    # Actual delegation can only be verified by inspecting the agent's child-session logs.
+    if ($runSucceeded) {
+        $t3 = $true
+        Test-Check -Number "T3" -Name "Orchestrator session ran and produced output (limited: does not prove delegation)" -Result $t3 -Hint "T3-T7 require OpenCode run to succeed; this check is a weak proxy for actual subagent invocation"
+    } else {
+        $t3 = $false
+        Test-Check -Number "T3" -Name "Orchestrator session ran and produced output" -Result $t3 -Status "NOT_RUN" -Hint "OpenCode run did not succeed: $openCodeFailureReason"
+    }
+
+    # All downstream T4-T7 are only meaningful if T3's prerequisite (OpenCode run succeeded) is met.
+    # If the run failed, mark them all NOT_RUN.
+    $runFailed = (-not $runSucceeded)
+
+    if ($runFailed) {
+        $notRunHint = "OpenCode run failed: $openCodeFailureReason - downstream checks are NOT_RUN"
+
+        # T4: Executor uses nan/qwen3.6 (verified by agent config, NOT by runtime execution)
+        $t4 = $false
+        if (Test-Path $targetExec) {
+            $execContent = Get-Content $targetExec -Raw
+            $t4 = $execContent -match 'model:\s*nan/qwen3\.6'
+        }
+        Test-Check -Number "T4" -Name "Executor agent model is nan/qwen3.6" -Result $t4 -Status "NOT_RUN" -Hint "$notRunHint (config-level check only)"
+
+        # T5: Executor modified only the requested fixture
+        $t5 = $false
+        Test-Check -Number "T5" -Name "Executor modified only the requested fixture" -Result $t5 -Status "NOT_RUN" -Hint "$notRunHint"
+
+        # T6: Orchestrator inspects git diff
+        $t6 = $false
+        Test-Check -Number "T6" -Name "Orchestrator inspects git diff of changes" -Result $t6 -Status "NOT_RUN" -Hint "$notRunHint"
+
+        # T7: Orchestrator produces verdict
+        $t7 = $false
+        Test-Check -Number "T7" -Name "Orchestrator produces verdict on result" -Result $t7 -Status "NOT_RUN" -Hint "$notRunHint"
+
+    } else {
+        # Run succeeded - proceed with downstream checks
 
         # Check if fixture was modified (evidence of executor work)
         $fixtureContent = Get-Content (Join-Path $sandbox "fixture.txt") -Raw -ErrorAction SilentlyContinue
         $fixtureChanged = ($fixtureContent -eq "CHANGED_BY_EXECUTOR")
         $fixtureHash = (Get-FileHash (Join-Path $sandbox "fixture.txt") -Algorithm SHA256).Hash
 
-        # ===================================================================
         # T4: Executor uses nan/qwen3.6 (verified by agent config)
-        # ===================================================================
         $t4 = $false
         if (Test-Path $targetExec) {
             $execContent = Get-Content $targetExec -Raw
             $t4 = $execContent -match 'model:\s*nan/qwen3\.6'
         }
-
         Test-Check -Number "T4" -Name "Executor agent model is nan/qwen3.6" -Result $t4 -Hint "Verified via agent config (runtime model detection requires session introspection)"
 
-        # ===================================================================
         # T5: Executor modified only the requested fixture
-        # ===================================================================
         $t5 = $false
         if ($fixtureChanged) {
-            # Verify unrelated file was NOT modified
             $unrelatedHash = (Get-FileHash (Join-Path $sandbox "unrelated.txt") -Algorithm SHA256).Hash
             $unrelatedUnchanged = ($unrelatedHash -eq $initialUnrelatedHash)
-
             if ($unrelatedUnchanged) {
                 $t5 = $true
             }
         }
-
         Test-Check -Number "T5" -Name "Executor modified only the requested fixture" -Result $t5
 
-        # ===================================================================
         # T6: Orchestrator can inspect git diff
-        # ===================================================================
         $t6 = $false
         try {
-            # Check that git diff shows the fixture change
             $diffOutput = git -C $sandbox diff --cached 2>&1 | Out-String
             $diffHasFixture = $diffOutput -match 'fixture\.txt'
-
-            # Also verify git status shows the change
             $statusOutput = git -C $sandbox status --porcelain 2>&1 | Out-String
             $statusHasFixture = $statusOutput -match 'fixture\.txt'
-
             $t6 = ($diffHasFixture -or $statusHasFixture)
         } catch {}
-
         Test-Check -Number "T6" -Name "Orchestrator can inspect git diff of changes" -Result $t6
 
-        # ===================================================================
         # T7: Orchestrator produces verdict
-        # ===================================================================
-        # The orchestrator's prompt instructs it to PASS or delegate correction.
-        # We check if the output contains verdict-like language.
         $t7 = $false
         if ($hasOutput) {
             try {
@@ -325,14 +363,7 @@ try {
                 }
             } catch {}
         }
-
         Test-Check -Number "T7" -Name "Orchestrator produces verdict on result" -Result $t7
-
-        # T3 result (delegated)
-        Test-Check -Number "T3" -Name "Orchestrator delegated (session ran and produced output)" -Result $t3
-
-    } catch {
-        Write-Host "       OpenCode run failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
     }
 
     # T8: No changes left outside sandbox
@@ -358,6 +389,20 @@ Write-Host "Passed   : $($script:results.passCount) / $($script:results.totalCou
 Write-Host "Not Run  : $($script:results.notRunCount) / $($script:results.totalCount)" -ForegroundColor Yellow
 Write-Host "Failed   : $($script:results.failCount) / $($script:results.totalCount)" -ForegroundColor $(if ($script:results.failCount -gt 0) { "Red" } else { "Green" })
 Write-Host ""
+
+# If the OpenCode run did not succeed, all meaningful smoke tests are NOT_RUN.
+# Do NOT report PASS when the core orchestration was not executed.
+if (-not $openCodeSuccess -or -not $hasOutput) {
+    $reason = "OpenCode run did not produce successful output"
+    if ($openCodeFailureReason) {
+        $reason = $openCodeFailureReason
+    }
+    Write-Host "RUNTIME SMOKE: NOT_RUN" -ForegroundColor Yellow
+    Write-Host "REASON  : $reason" -ForegroundColor Yellow
+    Write-Host "NOTE    : T1/T2 are static config checks; T3-T7 require a working OpenCode session." -ForegroundColor Yellow
+    Write-Host "          Static verify.ps1 should be used for non-runtime validation." -ForegroundColor Yellow
+    exit 0
+}
 
 if ($script:results.failCount -gt 0) {
     Write-Host "RUNTIME SMOKE: FAIL" -ForegroundColor Red

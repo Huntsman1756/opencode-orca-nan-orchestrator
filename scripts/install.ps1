@@ -62,7 +62,28 @@ foreach ($f in $coreFiles) {
     }
 }
 
-$hasExistingCore = $existingCore.Count -gt 0
+$hasExistingCore = $existingCore.Count -eq 3
+$partialCoreCount = $existingCore.Count
+
+if ($partialCoreCount -gt 0 -and $partialCoreCount -lt 3) {
+    Write-Host "ABORT: Partial CORE installation detected in $Target." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Missing files:" -ForegroundColor Yellow
+    foreach ($f in $coreFiles) {
+        if (-not (Test-Path (Join-Path $Target $f))) {
+            Write-Host "  - $f" -ForegroundColor Yellow
+        }
+    }
+    Write-Host ""
+    Write-Host "Found files:" -ForegroundColor Gray
+    foreach ($f in $existingCore) {
+        Write-Host "  - $f" -ForegroundColor Gray
+    }
+    Write-Host ""
+    Write-Host "Either remove the existing files and install fresh," -ForegroundColor Red
+    Write-Host "or complete the CORE install before adding Orca." -ForegroundColor Red
+    exit 1
+}
 
 # ---------- fail-closed pre-check for ORCA files ----------
 $orcaForbidden = @(
