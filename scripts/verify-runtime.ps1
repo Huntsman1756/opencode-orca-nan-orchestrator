@@ -157,26 +157,32 @@ $sandbox = Join-Path $env:TEMP ("opencode-orchestrator-smoke-${timestamp}-${rand
 Write-Host "Sandbox: $sandbox" -ForegroundColor Gray
 Write-Host ""
 
-try {
-    # Create sandbox
-    New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+# Capture pre-run state of the target repo BEFORE creating/executing sandbox
+    $targetGitStatusBefore = ""
+    try {
+        $targetGitStatusBefore = git -C $Target status --porcelain 2>&1 | Out-String
+    } catch {}
 
-    # Initialize minimal git repo (no remote)
-    Set-Location $sandbox
-    git init -q 2>&1 | Out-Null
-    git config user.email "smoke@test.local" 2>&1 | Out-Null
-    git config user.name "Smoke Test" 2>&1 | Out-Null
+    try {
+        # Create sandbox
+        New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
 
-    # Create opencode.jsonc (copy from project target)
-    $targetJsonc = Join-Path $Target "opencode.jsonc"
-    if (Test-Path $targetJsonc) {
-        Copy-Item $targetJsonc (Join-Path $sandbox "opencode.jsonc") -Force
-    }
+        # Initialize minimal git repo (no remote)
+        Set-Location $sandbox
+        git init -q 2>&1 | Out-Null
+        git config user.email "smoke@test.local" 2>&1 | Out-Null
+        git config user.name "Smoke Test" 2>&1 | Out-Null
 
-    # Create orchestrator.md (copy from project target)
-    $targetOrch = Join-Path $Target ".opencode\agents\orchestrator.md"
-    $sandboxAgents = Join-Path $sandbox ".opencode\agents"
-    New-Item -ItemType Directory -Path $sandboxAgents -Force | Out-Null
+        # Create opencode.jsonc (copy from project target)
+        $targetJsonc = Join-Path $Target "opencode.jsonc"
+        if (Test-Path $targetJsonc) {
+            Copy-Item $targetJsonc (Join-Path $sandbox "opencode.jsonc") -Force
+        }
+
+        # Create orchestrator.md (copy from project target)
+        $targetOrch = Join-Path $Target ".opencode\agents\orchestrator.md"
+        $sandboxAgents = Join-Path $sandbox ".opencode\agents"
+        New-Item -ItemType Directory -Path $sandboxAgents -Force | Out-Null
 
     if (Test-Path $targetOrch) {
         Copy-Item $targetOrch (Join-Path $sandboxAgents "orchestrator.md") -Force
@@ -396,13 +402,7 @@ try {
         # T7: Orchestrator produces verdict
         $t7 = $false
         if ($hasOutput) {
-# Capture pre-run state of the target repo
-    $targetGitStatusBefore = ""
-    try {
-        $targetGitStatusBefore = git -C $Target status --porcelain 2>&1 | Out-String
-    } catch {}
-
-    try {
+            try {
                 $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
                 if ($output -match '(?i)(pass|fail|verdict|complete|review|correct|reject)') {
                     $t7 = $true
@@ -414,20 +414,14 @@ try {
 
     # T8: No changes left outside sandbox
     Set-Location $Target
-    $t8 = $true
-    $t8Hint = ""
-
     try {
         $targetGitStatusAfter = git -C $Target status --porcelain 2>&1 | Out-String
-        if ($targetGitStatusAfter.Trim() -ne $targetGitStatusBefore.Trim()) {
-            $t8 = $false
-            $t8Hint = "git status changed after sandbox run"
-        }
+        $t8 = ($targetGitStatusBefore.Trim() -eq $targetGitStatusAfter.Trim())
     } catch {
-        $t8Hint = "Could not check git status of target repo"
+        $t8 = $true  # cannot check; assume clean
     }
 
-    Test-Check -Number "T8" -Name "No changes left outside sandbox" -Result $t8 -Hint $t8Hint
+    Test-Check -Number "T8" -Name "No changes left outside sandbox" -Result $t8
 
 } finally {
     # Cleanup: remove sandbox

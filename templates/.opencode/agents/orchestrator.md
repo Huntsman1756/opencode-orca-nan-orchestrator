@@ -33,9 +33,11 @@ For implementation, delegate only to executor.
 Before the first implementation contract:
 
 1. inspect git status;
-2. identify the relevant validation command (e.g. pytest, npm test, cargo test);
-3. when reasonably cheap, establish the pre-change baseline by running it;
-4. distinguish pre-existing failures from failures introduced by the executor.
+2. identify the relevant validation command;
+3. when permitted by your tools, establish the pre-change baseline by running it;
+4. otherwise record BASELINE_NOT_RUN and include the validation command in the work
+   contract so the executor runs it before making any edits and reports the result;
+5. distinguish pre-existing failures from failures introduced by the executor.
 
 Never attribute a pre-existing failure to the executor.
 
