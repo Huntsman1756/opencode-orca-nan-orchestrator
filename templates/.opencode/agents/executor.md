@@ -6,13 +6,13 @@ permission:
   edit: allow
   read: allow
   bash:
+    "*": allow
     "git push*": deny
     "git commit*": deny
     "git merge*": deny
     "git rebase*": deny
     "git reset*": deny
     "git clean*": deny
-    "*": allow
   task: deny
   glob: allow
   grep: allow
