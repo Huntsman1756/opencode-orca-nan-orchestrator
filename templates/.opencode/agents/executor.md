@@ -5,7 +5,14 @@ description: Implements bounded work contracts from the orchestrator
 permission:
   edit: allow
   read: allow
-  bash: allow
+  bash:
+    "git push*": deny
+    "git commit*": deny
+    "git merge*": deny
+    "git rebase*": deny
+    "git reset*": deny
+    "git clean*": deny
+    "*": allow
   task: deny
   glob: allow
   grep: allow

@@ -213,21 +213,23 @@ Test-Check -Number 8 -Name "No prompt_file in any config file" -Result $check8
 # ---------------------------------------------------------------------------
 # Check 9: No agent definition in JSON that duplicates .md frontmatter
 # ---------------------------------------------------------------------------
-# If both opencode.jsonc defines an agent AND that agent has a .md file,
-# it creates ambiguity. We only allow .md files to define agents.
-$check9 = $true
+# Agent definitions live exclusively in .opencode/agents/*.md.
+# opencode.jsonc must NOT define orchestrator or executor as agents.
+$check9a = $true  # no orchestrator in JSON
+$check9b = $true  # no executor in JSON
 
 if ($check1) {
     $jsonContent = Get-Content $opencodePath -Raw
     if ($jsonContent -match '"orchestrator"\s*:\s*\{') {
-        # Check if this JSON orchestrator has a prompt_file (old pattern)
-        if ($jsonContent -match '"orchestrator"[^}]*prompt_file') {
-            $check9 = $false
-        }
+        $check9a = $false
+    }
+    if ($jsonContent -match '"executor"\s*:\s*\{') {
+        $check9b = $false
     }
 }
 
-Test-Check -Number 9 -Name "No agent duplication between JSON and .md" -Result $check9
+Test-Check -Number 9a -Name "No 'orchestrator' agent defined in opencode.jsonc" -Result $check9a
+Test-Check -Number 9b -Name "No 'executor' agent defined in opencode.jsonc" -Result $check9b
 
 # ---------------------------------------------------------------------------
 # ORCA MODE checks (only if orca.toml exists)

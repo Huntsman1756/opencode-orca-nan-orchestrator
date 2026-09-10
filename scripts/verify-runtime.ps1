@@ -356,7 +356,13 @@ try {
         # T7: Orchestrator produces verdict
         $t7 = $false
         if ($hasOutput) {
-            try {
+# Capture pre-run state of the target repo
+    $targetGitStatusBefore = ""
+    try {
+        $targetGitStatusBefore = git -C $Target status --porcelain 2>&1 | Out-String
+    } catch {}
+
+    try {
                 $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
                 if ($output -match '(?i)(pass|fail|verdict|complete|review|correct|reject)') {
                     $t7 = $true
@@ -368,9 +374,20 @@ try {
 
     # T8: No changes left outside sandbox
     Set-Location $Target
-    $t8 = $true  # We created everything in $sandbox and never touched the real repo
+    $t8 = $true
+    $t8Hint = ""
 
-    Test-Check -Number "T8" -Name "No changes left outside sandbox" -Result $t8
+    try {
+        $targetGitStatusAfter = git -C $Target status --porcelain 2>&1 | Out-String
+        if ($targetGitStatusAfter.Trim() -ne $targetGitStatusBefore.Trim()) {
+            $t8 = $false
+            $t8Hint = "git status changed after sandbox run"
+        }
+    } catch {
+        $t8Hint = "Could not check git status of target repo"
+    }
+
+    Test-Check -Number "T8" -Name "No changes left outside sandbox" -Result $t8 -Hint $t8Hint
 
 } finally {
     # Cleanup: remove sandbox
