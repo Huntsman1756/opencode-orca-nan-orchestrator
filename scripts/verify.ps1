@@ -1,4 +1,4 @@
-# verify.ps1 - Verify that the OpenCode + Orca kit is correctly installed in a project
+# verify.ps1 - Static verification of the OpenCode orchestrator kit
 #
 # Usage:
 #   .\scripts\verify.ps1 [-Target <path>]
@@ -6,9 +6,14 @@
 # Parameters:
 #   -Target  Path to the project root (default: current directory).
 #
+# Checks:
+#   1-5: Core config validation (always)
+#   6-9: Permission enforcement on agents (always)
+#  10-13: Orca mode (only if orca.toml exists)
+#
 # Exit codes:
-#   0  - all checks passed
-#   1  - one or more checks failed
+#   0  - all relevant checks passed
+#   1  - one or more relevant checks failed
 
 [CmdletBinding()]
 param(
@@ -17,7 +22,7 @@ param(
 
 $Target = (Resolve-Path -Path $Target -ErrorAction Stop | Select-Object -First 1).Path
 
-# Use a script-scoped hashtable for counters (PowerShell function scope isolation fix)
+# Use a script-scoped hashtable for counters
 $script:results = @{
     passCount = 0
     failCount = 0
@@ -44,259 +49,301 @@ function Test-Check {
     }
 }
 
-Write-Host "=== OpenCode + Orca Kit Verifier ===" -ForegroundColor Cyan
+Write-Host "=== OpenCode Orchestrator Kit Verifier ===" -ForegroundColor Cyan
 Write-Host "Target : $Target" -ForegroundColor Gray
 Write-Host ""
 
 # ---------------------------------------------------------------------------
-# Check 1: opencode.jsonc exists and has expected content
+# Check 1: opencode.jsonc exists
 # ---------------------------------------------------------------------------
 $opencodePath = Join-Path $Target "opencode.jsonc"
 $check1 = Test-Path $opencodePath
 
+Test-Check -Number 1 -Name "opencode.jsonc exists" -Result $check1
+
+# ---------------------------------------------------------------------------
+# Check 2: opencode.jsonc has expected top-level keys
+# ---------------------------------------------------------------------------
+$check2 = $false
+
 if ($check1) {
     $content = Get-Content $opencodePath -Raw
+
     $hasDefault = $content -match '"default_agent"\s*:\s*"orchestrator"'
-    $hasGlm = $content -match 'nan/glm5\.3-flash'
-    $check1 = $hasDefault -and $hasGlm
+    $hasModel   = $content -match '"model"\s*:\s*"nan/glm5\.3-flash"'
+    $hasPromptFile = $content -match 'prompt_file'
+
+    $check2 = $hasDefault -and $hasModel -and (-not $hasPromptFile)
 }
 
-Test-Check -Number 1 -Name "opencode.jsonc exists with default_agent=orchestrator and model nan/glm5.3-flash" -Result $check1
+Test-Check -Number 2 -Name "opencode.jsonc: default_agent=orchestrator, model=nan/glm5.3-flash, no prompt_file" -Result $check2
 
 # ---------------------------------------------------------------------------
-# Check 2: opencode.jsonc has executor model and disables unused agents
+# Check 3: Built-in agents are disabled
 # ---------------------------------------------------------------------------
-$check2b = $false
+$check3 = $false
 
-if (Test-Path $opencodePath) {
+if ($check1) {
     $content = Get-Content $opencodePath -Raw
 
-    # Check executor model
-    $hasExecutor = $content -match 'nan/qwen3\.6'
+    $hasBuildDisable = $content -match '"build"\s*:\s*\{[^}]*"disable"\s*:\s*true'
+    $hasPlanDisable  = $content -match '"plan"\s*:\s*\{[^}]*"disable"\s*:\s*true'
+    $hasGeneralDisable = $content -match '"general"\s*:\s*\{[^}]*"disable"\s*:\s*true'
+    $hasExploreDisable = $content -match '"explore"\s*:\s*\{[^}]*"disable"\s*:\s*true'
 
-    if ($hasExecutor) {
-        # Check disabled agents using content scan
-        $hasBuildDisable = $false
-        $hasPlanDisable = $false
-        $hasGeneralDisable = $false
-        $hasExploreDisable = $false
-
-        $lines = Get-Content $opencodePath
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '"build"') {
-                for ($j = $i; $j -lt ([Math]::Min($i + 5, $lines.Count)); $j++) {
-                    if ($lines[$j] -match '"disable"\s*:\s*true') { $hasBuildDisable = $true }
-                }
-            }
-            if ($lines[$i] -match '"plan"') {
-                for ($j = $i; $j -lt ([Math]::Min($i + 5, $lines.Count)); $j++) {
-                    if ($lines[$j] -match '"disable"\s*:\s*true') { $hasPlanDisable = $true }
-                }
-            }
-            if ($lines[$i] -match '"general"') {
-                for ($j = $i; $j -lt ([Math]::Min($i + 5, $lines.Count)); $j++) {
-                    if ($lines[$j] -match '"disable"\s*:\s*true') { $hasGeneralDisable = $true }
-                }
-            }
-            if ($lines[$i] -match '"explore"') {
-                for ($j = $i; $j -lt ([Math]::Min($i + 5, $lines.Count)); $j++) {
-                    if ($lines[$j] -match '"disable"\s*:\s*true') { $hasExploreDisable = $true }
-                }
-            }
-        }
-
-        $check2b = $hasBuildDisable -and $hasPlanDisable -and $hasGeneralDisable -and $hasExploreDisable
-    }
+    $check3 = $hasBuildDisable -and $hasPlanDisable -and $hasGeneralDisable -and $hasExploreDisable
 }
 
-Test-Check -Number 2 -Name "opencode.jsonc: executor model nan/qwen3.6, disabled agents (build/plan/general/explore)" -Result $check2b
+Test-Check -Number 3 -Name "Built-in agents disabled (build/plan/general/explore)" -Result $check3
 
 # ---------------------------------------------------------------------------
-# Check 3: Agent prompt files exist and are non-empty
+# Check 4: Agent prompt files exist and are non-empty
 # ---------------------------------------------------------------------------
 $orchPath = Join-Path $Target ".opencode\agents\orchestrator.md"
 $execPath = Join-Path $Target ".opencode\agents\executor.md"
 
-$check3a = $false
-$check3b = $false
+$check4a = (Test-Path $orchPath) -and ((Get-Item $orchPath).Length -gt 0)
+$check4b = (Test-Path $execPath) -and ((Get-Item $execPath).Length -gt 0)
+
+Test-Check -Number 4a -Name "orchestrator.md exists and is non-empty" -Result $check4a
+Test-Check -Number 4b -Name "executor.md exists and is non-empty" -Result $check4b
+
+# ---------------------------------------------------------------------------
+# Check 5: Agent frontmatter - models, modes, descriptions
+# ---------------------------------------------------------------------------
+$check5a = $false  # orchestrator has YAML frontmatter
+$check5b = $false  # executor has YAML frontmatter
+$check5c = $false  # orchestrator model
+$check5d = $false  # executor model
+$check5e = $false  # orchestrator mode=primary
+$check5f = $false  # executor mode=subagent
+$check5g = $false  # orchestrator has description
+$check5h = $false  # executor has description
 
 if (Test-Path $orchPath) {
-    $size = (Get-Item $orchPath).Length
-    $check3a = $size -gt 0
+    $orchContent = Get-Content $orchPath -Raw
+    $check5a = $orchContent -match '^---[\r\n]'
+    $check5c = $orchContent -match 'model:\s*nan/glm5\.3-flash'
+    $check5e = $orchContent -match 'mode:\s*primary'
+    $check5g = $orchContent -match 'description:'
 }
+
 if (Test-Path $execPath) {
-    $size = (Get-Item $execPath).Length
-    $check3b = $size -gt 0
-}
-$check3Result = $check3a -and $check3b
-
-Test-Check -Number 3 -Name "Agent prompts exist and are non-empty" -Result $check3Result
-
-# ---------------------------------------------------------------------------
-# Check 4: orca.toml exists with required stages
-# ---------------------------------------------------------------------------
-$orcaPath = Join-Path $Target "orca.toml"
-$check4 = $false
-
-if (Test-Path $orcaPath) {
-    $content = Get-Content $orcaPath -Raw
-    $hasReview = $content -match '[\[\]]tickets[\[\]]' -and $content -match 'name\s*=\s*"review"'
-    $hasWork = $content -match 'name\s*=\s*"work"'
-    $hasPlan = $content -match 'name\s*=\s*"plan"'
-    $check4 = $hasReview -and $hasWork -and $hasPlan
+    $execContent = Get-Content $execPath -Raw
+    $check5b = $execContent -match '^---[\r\n]'
+    $check5d = $execContent -match 'model:\s*nan/qwen3\.6'
+    $check5f = $execContent -match 'mode:\s*subagent'
+    $check5h = $execContent -match 'description:'
 }
 
-Test-Check -Number 4 -Name "orca.toml exists with stages review, work, plan" -Result $check4
+Test-Check -Number 5a -Name "Orchestrator frontmatter: model=nan/glm5.3-flash, mode=primary" -Result ($check5a -and $check5c -and $check5e -and $check5g)
+Test-Check -Number 5b -Name "Executor frontmatter: model=nan/qwen3.6, mode=subagent" -Result ($check5b -and $check5d -and $check5f -and $check5h)
 
 # ---------------------------------------------------------------------------
-# Check 5: deno.json has tasks.orca
+# Check 6: Orchestrator permissions - edit must be explicitly denied
 # ---------------------------------------------------------------------------
-$denoPath = Join-Path $Target "deno.json"
-$check5 = $false
+$check6a = $false  # orchestrator has permission block
+$check6b = $false  # orchestrator edit: deny present
+$check6c = $false  # orchestrator task restricted to executor only
 
-if (Test-Path $denoPath) {
-    $content = Get-Content $denoPath -Raw
-    $check5 = $content -match '"orca"'
-}
+if (Test-Path $orchPath) {
+    $orchContent = Get-Content $orchPath -Raw
+    $check6a = $orchContent -match 'permission:'
+    $check6b = $orchContent -match 'edit:\s*deny'
 
-Test-Check -Number 5 -Name "deno.json has tasks.orca" -Result $check5
-
-# ---------------------------------------------------------------------------
-# Check 6: ticket CLI files exist
-# ---------------------------------------------------------------------------
-$ticketCmd = Join-Path $Target ".orca-tools\bin\ticket.cmd"
-$ticketSh = Join-Path $Target ".orca-tools\bin\ticket.sh"
-
-$check6 = (Test-Path $ticketCmd) -and (Test-Path $ticketSh)
-
-Test-Check -Number 6 -Name "Ticket CLI files (.orca-tools/bin/ticket.cmd and ticket.sh)" -Result $check6
-
-# ---------------------------------------------------------------------------
-# Check 7: .orca-local is a git repo with correct HEAD
-# ---------------------------------------------------------------------------
-$orcaLocal = Join-Path $Target ".orca-local"
-$expectedCommit = "35938cc8aa328853333bd171d474c300b4c09251"
-$check7Result = $false
-$check7Hint = ""
-
-if (Test-Path $orcaLocal) {
-    $gitHeadPath = Join-Path $orcaLocal ".git"
-    if (Test-Path $gitHeadPath) {
-        try {
-            $headCommit = git -C $orcaLocal rev-parse HEAD 2>&1 | Out-String
-            $headCommit = $headCommit.Trim()
-            if ($headCommit -eq $expectedCommit) {
-                $check7Result = $true
-            } else {
-                $check7Hint = "Expected HEAD=$expectedCommit but HEAD=$headCommit"
-            }
-        } catch {
-            $check7Hint = "Failed to read git HEAD: $_"
-        }
+    # Check task: verify executor is in allowlist and there's a deny/ask wildcard
+    if ($orchContent -match 'task:') {
+        $hasTaskExecutorAllow = $orchContent -match 'executor:\s*allow'
+        $hasTaskWildcardDeny = $orchContent -match ':\s*\*\s*:\s*(?:deny|ask)' -or $orchContent -match ':\s*"\*"\s*:\s*(?:deny|ask)'
+        $check6c = $hasTaskExecutorAllow -and $hasTaskWildcardDeny
     } else {
-        $check7Result = $false
-        $check7Hint = ".orca-local exists but is not a git repo"
+        $check6c = $false
     }
-} else {
-    $check7Hint = ".orca-local not found. Manual clone: git clone https://github.com/upvalue/orca.git $Target\.orca-local"
 }
 
-Test-Check -Number 7 -Name ".orca-local git repo with pinned commit" -Result $check7Result -Hint $check7Hint
+Test-Check -Number 6a -Name "Orchestrator has explicit permission block" -Result $check6a
+Test-Check -Number 6b -Name "Orchestrator: edit explicitly denied" -Result $check6b
+Test-Check -Number 6c -Name "Orchestrator: task delegation restricted to executor only" -Result $check6c
 
 # ---------------------------------------------------------------------------
-# Check 8: Required tools resolvable
+# Check 7: Executor permissions - task must be explicitly denied
 # ---------------------------------------------------------------------------
-$toolsToCheck = @("deno", "git", "jq")
+$check7a = $false  # executor has permission block
+$check7b = $false  # executor task: deny present
+$check7c = $false  # executor webfetch: deny
+$check7d = $false  # executor skill: deny
+
+if (Test-Path $execPath) {
+    $execContent = Get-Content $execPath -Raw
+    $check7a = $execContent -match 'permission:'
+    $check7b = $execContent -match 'task:\s*deny'
+    $check7c = $execContent -match 'webfetch:\s*deny'
+    $check7d = $execContent -match 'skill:\s*deny'
+}
+
+Test-Check -Number 7a -Name "Executor has explicit permission block" -Result $check7a
+Test-Check -Number 7b -Name "Executor: task explicitly denied" -Result $check7b
+Test-Check -Number 7c -Name "Executor: webfetch denied" -Result $check7c
+Test-Check -Number 7d -Name "Executor: skill denied" -Result $check7d
+
+# Check 7e-7h: Executor bash deny git-mutator commands
+# The executor has bash:allow for tests but must deny git push/commit/merge/rebase/reset/clean.
+# OpenCode uses last-match-wins: wildcards must come before specific denies.
+$check7e = $false  # executor has bash block at all
+$check7f = $false  # has "*": allow before specific denies (last-match-wins)
+$check7g = $false  # has specific git denies
+$check7h = $false  # deny commands present: push, commit, merge
+
+if (Test-Path $execPath) {
+    $execContent = Get-Content $execPath -Raw
+    $check7e = $execContent -match 'bash:'
+
+    if ($check7e) {
+        # Check wildcard comes before specific rules (last-match-wins)
+        $posAsterisk = $execContent.IndexOf('"*": allow')
+        $posGitPush = $execContent.IndexOf('"git push*": deny')
+        $posGitCommit = $execContent.IndexOf('"git commit*": deny')
+        $posGitMerge = $execContent.IndexOf('"git merge*": deny')
+        $posGitRebase = $execContent.IndexOf('"git rebase*": deny')
+        $posGitReset = $execContent.IndexOf('"git reset*": deny')
+        $posGitClean = $execContent.IndexOf('"git clean*": deny')
+
+        if ($posAsterisk -ge 0) {
+            $check7f = $true
+            $hasGitDenies = ($posGitPush -ge 0) -and ($posGitCommit -ge 0) -and
+                            ($posGitMerge -ge 0) -and ($posGitRebase -ge 0) -and
+                            ($posGitReset -ge 0) -and ($posGitClean -ge 0)
+            # Each specific deny must come AFTER the wildcard
+            $check7g = $hasGitDenies -and
+                       ($posGitPush -gt $posAsterisk) -and
+                       ($posGitCommit -gt $posAsterisk) -and
+                       ($posGitMerge -gt $posAsterisk) -and
+                       ($posGitRebase -gt $posAsterisk) -and
+                       ($posGitReset -gt $posAsterisk) -and
+                       ($posGitClean -gt $posAsterisk)
+            $check7h = $hasGitDenies
+        }
+    }
+}
+
+Test-Check -Number 7e -Name "Executor has explicit bash block" -Result $check7e
+Test-Check -Number 7f -Name "Executor: wildcard before git denies (last-match-wins)" -Result $check7f
+Test-Check -Number 7g -Name "Executor: git push deny present" -Result $check7g
+Test-Check -Number 7h -Name "Executor: all 6 git-mutator commands denied (push/commit/merge/rebase/reset/clean)" -Result $check7h
+
+# ---------------------------------------------------------------------------
+# Check 8: No prompt_file anywhere in project config
+# ---------------------------------------------------------------------------
 $check8 = $true
 
-foreach ($tool in $toolsToCheck) {
-    $toolResult = Get-Command $tool -ErrorAction SilentlyContinue
-    if (-not $toolResult) {
-        Write-Host "       Missing tool: $tool" -ForegroundColor DarkRed
-        $check8 = $false
+$configFiles = @(
+    (Join-Path -Path $Target -ChildPath "opencode.jsonc"),
+    (Join-Path -Path $Target -ChildPath ".opencode.jsonc"),
+    (Join-Path -Path $Target -ChildPath ".opencode\config.jsonc"),
+    (Join-Path -Path $Target -ChildPath ".opencode\config.json")
+)
+
+foreach ($cf in $configFiles) {
+    if (Test-Path $cf) {
+        $cfContent = Get-Content $cf -Raw
+        if ($cfContent -match 'prompt_file') {
+            $check8 = $false
+            break
+        }
     }
 }
 
-# bash is a WARN only
-$bashPath = "C:\Program Files\Git\usr\bin\bash.exe"
-if (-not (Test-Path $bashPath)) {
-    Write-Host "       WARN: bash not found at $bashPath (may still work via PATH)" -ForegroundColor Yellow
+Test-Check -Number 8 -Name "No prompt_file in any config file" -Result $check8
+
+# ---------------------------------------------------------------------------
+# Check 9: No agent definition in JSON that duplicates .md frontmatter
+# ---------------------------------------------------------------------------
+# Agent definitions live exclusively in .opencode/agents/*.md.
+# opencode.jsonc must NOT define orchestrator or executor as agents.
+$check9a = $true  # no orchestrator in JSON
+$check9b = $true  # no executor in JSON
+
+if ($check1) {
+    $jsonContent = Get-Content $opencodePath -Raw
+    if ($jsonContent -match '"orchestrator"\s*:\s*\{') {
+        $check9a = $false
+    }
+    if ($jsonContent -match '"executor"\s*:\s*\{') {
+        $check9b = $false
+    }
 }
 
-Test-Check -Number 8 -Name "Required tools resolvable (deno, git, jq)" -Result $check8
+Test-Check -Number 9a -Name "No 'orchestrator' agent defined in opencode.jsonc" -Result $check9a
+Test-Check -Number 9b -Name "No 'executor' agent defined in opencode.jsonc" -Result $check9b
 
 # ---------------------------------------------------------------------------
-# Check 9: Ticket smoke test
+# ORCA MODE checks (only if orca.toml exists)
 # ---------------------------------------------------------------------------
-$check9Result = $false
-$check9Hint = ""
+$orcaPath = Join-Path $Target "orca.toml"
+$hasOrca = Test-Path $orcaPath
 
-# Use ticket.cmd for simple operations; for filtered query we verify via
-# raw JSON output because ticket.sh's jq invocation inside double quotes
-# cannot preserve embedded double-quote filter arguments (byte-identical
-# constraint on vendored ticket.sh).
-$ticketCmd = Join-Path $Target ".orca-tools\bin\ticket.cmd"
-$ticketSh = Join-Path $Target ".orca-tools\bin\ticket.sh"
-$ticketShPosix = $ticketSh -replace '\\', '/'
+if ($hasOrca) {
+    Write-Host ""
+    Write-Host "--- Orca mode detected ---" -ForegroundColor Magenta
+    Write-Host ""
 
-if ($check8 -and (Test-Path $ticketCmd)) {
-    $tempDir = Join-Path $env:TEMP ("kit-scratch-ticket-$([DateTime]::Now.ToString('yyyyMMddHHmmssffff'))")
-    New-Item -ItemType Directory -Path (Join-Path $tempDir ".tickets") -Force | Out-Null
+    # Check 10: orca.toml exists with required stages
+    $check10 = $false
+    $orcaContent = Get-Content $orcaPath -Raw
+    $hasReview = $orcaContent -match 'name\s*=\s*"review"'
+    $hasWork = $orcaContent -match 'name\s*=\s*"work"'
+    $hasPlan = $orcaContent -match 'name\s*=\s*"plan"'
+    $check10 = $hasReview -and $hasWork -and $hasPlan
 
-    try {
-        $env:TICKETS_DIR = Join-Path $tempDir ".tickets"
+    Test-Check -Number 10 -Name "orca.toml exists with stages review, work, plan" -Result $check10
 
-        # Create a ticket (via ticket.cmd)
-        $createOut = & $ticketCmd create Test --description x 2>&1 | Out-String
-        $createExit = $LASTEXITCODE
-        $ticketId = $createOut.Trim()
+    # Check 11: deno.json has orca tasks
+    $denoPath = Join-Path $Target "deno.json"
+    $check11 = $false
 
-        if ($createExit -eq 0 -and $ticketId -ne "" -and $ticketId -ne "0") {
-            # List tickets (via ticket.cmd)
-            $lsOut = & $ticketCmd ls 2>&1 | Out-String
-            $lsExit = $LASTEXITCODE
+    if (Test-Path $denoPath) {
+        $denoContent = Get-Content $denoPath -Raw
+        $check11 = $denoContent -match '"orca"'
+    }
 
-            # Query tickets (via ticket.cmd)
-            $queryOut = & $ticketCmd query 2>&1 | Out-String
-            $queryExit = $LASTEXITCODE
+    Test-Check -Number 11 -Name "deno.json has orca tasks" -Result $check11
 
-# Query with filter: use jq directly with --arg to safely pass the
-            # filter value (ticket.sh's jq invocation inside double quotes
-            # cannot preserve embedded double-quote args, byte-identical constraint)
-            $queryFilterOut = $queryOut | jq --arg status open 'select(.status == $status)' 2>&1 | Out-String
-            $queryFilterExit = $LASTEXITCODE
+    # Check 12: ticket CLI files exist
+    $ticketCmd = Join-Path $Target ".orca-tools\bin\ticket.cmd"
+    $ticketSh = Join-Path $Target ".orca-tools\bin\ticket.sh"
+    $check12 = (Test-Path $ticketCmd) -and (Test-Path $ticketSh)
 
-            # Close ticket (via ticket.cmd)
-            $closeOut = & $ticketCmd close $ticketId 2>&1 | Out-String
-            $closeExit = $LASTEXITCODE
+    Test-Check -Number 12 -Name "Ticket CLI files present" -Result $check12
 
-            if ($lsExit -eq 0 -and $queryExit -eq 0 -and $queryFilterExit -eq 0 -and $closeExit -eq 0) {
-                $check9Result = $true
-            } else {
-                $check9Hint = "Ticket commands failed: create=$createExit ls=$lsExit query=$queryExit query-filter=$queryFilterExit close=$closeExit"
+    # Check 13: .orca-local is a git repo with correct HEAD
+    $orcaLocal = Join-Path $Target ".orca-local"
+    $expectedCommit = "35938cc8aa328853333bd171d474c300b4c09251"
+    $check13Result = $false
+    $check13Hint = ""
+
+    if (Test-Path $orcaLocal) {
+        $gitHeadPath = Join-Path $orcaLocal ".git"
+        if (Test-Path $gitHeadPath) {
+            try {
+                $headCommit = git -C $orcaLocal rev-parse HEAD 2>&1 | Out-String
+                $headCommit = $headCommit.Trim()
+                if ($headCommit -eq $expectedCommit) {
+                    $check13Result = $true
+                } else {
+                    $check13Hint = "Expected HEAD=$expectedCommit but HEAD=$headCommit"
+                }
+            } catch {
+                $check13Hint = "Failed to read git HEAD: $_"
             }
         } else {
-            $check9Hint = "Ticket create failed (exit=$createExit): $createOut"
+            $check13Hint = ".orca-local exists but is not a git repo"
         }
-    } catch {
-        $check9Hint = "Ticket smoke test exception: $_"
-    } finally {
-        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $env:TICKETS_DIR -ErrorAction SilentlyContinue) {
-            Remove-Item $env:TICKETS_DIR -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        Remove-Variable TICKETS_DIR -ErrorAction SilentlyContinue
+    } else {
+        $check13Hint = ".orca-local not found. Manual clone: git clone https://github.com/upvalue/orca.git $Target\.orca-local"
     }
-} else {
-    if (-not $check8) {
-        $check9Hint = "Skipping: required tools not found (check 8 failed)"
-    }
-    if (-not (Test-Path $ticketCmd)) {
-        $check9Hint = "Skipping: ticket.cmd not found at $ticketCmd"
-    }
-}
 
-Test-Check -Number 9 -Name "Ticket smoke test (create, ls, query, query-filter, close)" -Result $check9Result -Hint $check9Hint
+    Test-Check -Number 13 -Name ".orca-local git repo with pinned commit" -Result $check13Result -Hint $check13Hint
+}
 
 # ---------------------------------------------------------------------------
 # Summary

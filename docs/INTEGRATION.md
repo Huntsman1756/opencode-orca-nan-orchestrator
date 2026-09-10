@@ -1,6 +1,11 @@
 # Integration Guide
 
-This document describes how a consuming project integrates with the OpenCode + Orca orchestration kit.
+> **IMPORTANT: This guide documents the OPTIONAL / ADVANCED Orca ticket mode.**
+>
+> The CORE kit (OpenCode orchestrator + executor) does **not** require Orca, Deno, jq, or any ticket system.
+> See [`README.md`](../README.md) for the minimal CORE setup.
+
+This document describes how a consuming project integrates with the OpenCode + Orca orchestration kit **when installed with `-WithOrca`**.
 
 ## Workflow Tags
 
@@ -12,7 +17,7 @@ The kit uses a tag-based workflow managed by `orca.toml` stages:
 | `ready-for-work`   | Decomposed, ready for implementation | orchestrator | work             |
 | `ready-for-review` | Implementation complete          | orchestrator     | review           |
 | `verified`         | Passed review                    | — (inactionable) | verified         |
-| `blocked`          | Blocked by external condition    | — (inactionable) | blocked          |
+| `blocked`          | Blocked by external condition    | — (inactionable) | blocked         |
 | `needs-human-decision` | Requires human input          | — (inactionable) | human-decision   |
 
 ### Flow
@@ -32,15 +37,15 @@ The `orca.toml` stages are evaluated in order: review, work, plan. Within each s
 
 The kit is designed so that consuming projects add their OWN rules layer without touching the kit files:
 
-1. **`AGENTS.md` conventions** — The agent prompt templates are generic. Each consuming project creates its own `AGENTS.md` (as shown in the reference repo) that adds project-specific language, safety rules and conventions. The kit agent prompts delegate to these conventions.
+1. **Agent prompt customization** — The agent prompt templates are in `.opencode/agents/`. Each consuming project can edit these directly for project-specific language, safety rules and conventions.
 
-2. **Project-specific `orca.toml` additions** — After installation, the consuming project has its own copy of `orca.toml`. Add new stages, modify existing prompts, or add project-specific tags by editing this copy. The kit's installed copy is a template; the project's copy is authoritative.
+2. **Project-specific `orca.toml` additions** — After installation with `-WithOrca`, the consuming project has its own copy of `orca.toml`. Add new stages, modify existing prompts, or add project-specific tags by editing this copy.
 
-3. **Additional tools** — Project-specific scripts in `.orca-tools/` or `scripts/` can be added independently. The install script only creates the directory if missing and copies its own files.
+3. **Additional tools** — Project-specific scripts in `.orca-tools/` or `scripts/` can be added independently.
 
 ## Manual Orca Bootstrap
 
-If `install.ps1` could not clone orca (e.g., no network), run manually:
+If `install.ps1 -WithOrca` could not clone orca (e.g., no network), run manually:
 
 ```powershell
 git clone https://github.com/upvalue/orca.git .orca-local
@@ -51,7 +56,7 @@ After bootstrapping, re-run `.\scripts\verify.ps1` to confirm.
 
 ## deno.json Merge Note
 
-If the target project already has a `deno.json`, the installer will refuse (fail-closed). In that case:
+If the target project already has a `deno.json`, the installer with `-WithOrca` will refuse (fail-closed). In that case:
 
 1. Manually merge the two `deno.json` files.
 2. Ensure these keys exist in the final file:
