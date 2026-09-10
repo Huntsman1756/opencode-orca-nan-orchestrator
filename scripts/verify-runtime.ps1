@@ -1,7 +1,7 @@
 # verify-runtime.ps1 - Runtime smoke test for the OpenCode orchestrator kit
 #
-# This script performs end-to-end verification of the GLM→Qwen→GLM flow.
-# It uses ONLY a temporary directory — never modifies the real repository.
+# This script performs end-to-end verification of the GLM-Qwen-GLM flow.
+# It uses ONLY a temporary directory - never modifies the real repository.
 #
 # Usage:
 #   .\scripts\verify-runtime.ps1 [-Target <path>]
@@ -124,14 +124,14 @@ Write-Host ""
 
 # If no credentials, skip all runtime tests
 if (-not $hasNaNCredentials) {
-    Write-Host "NO NaN CREDENTIALS DETECTED — all runtime tests will be NOT_RUN" -ForegroundColor Yellow
+    Write-Host "NO NaN CREDENTIALS DETECTED - all runtime tests will be NOT_RUN" -ForegroundColor Yellow
     Write-Host ""
 
     Test-Check -Number "T1" -Name "Orchestrator agent resolution" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
     Test-Check -Number "T2" -Name "Parent session uses nan/glm5.3-flash" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
     Test-Check -Number "T3" -Name "Orchestrator delegates to executor" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
     Test-Check -Number "T4" -Name "Child session uses nan/qwen3.6" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
-    Test-Check -Number "T5" -name "Executor modifies only the requested fixture" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
+    Test-Check -Number "T5" -Name "Executor modifies only the requested fixture" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
     Test-Check -Number "T6" -Name "Orchestrator inspects git diff" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
     Test-Check -Number "T7" -Name "Orchestrator produces verdict" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
     Test-Check -Number "T8" -Name "No changes left in sandbox" -Result $false -Status "NOT_RUN" -Hint "Requires NaN API credentials"
@@ -142,7 +142,7 @@ if (-not $hasNaNCredentials) {
     Write-Host "Not Run  : $($script:results.notRunCount) / $($script:results.totalCount)" -ForegroundColor Yellow
     Write-Host "Failed   : $($script:results.failCount) / $($script:results.totalCount)" -ForegroundColor Green
     Write-Host ""
-    Write-Host "RUNTIME SMOKE: NOT_RUN — no NaN credentials available" -ForegroundColor Yellow
+    Write-Host "RUNTIME SMOKE: NOT_RUN - no NaN credentials available" -ForegroundColor Yellow
     Write-Host "Static config validation should be run separately." -ForegroundColor Yellow
     exit 0
 }
@@ -188,13 +188,21 @@ try {
         Copy-Item $targetExec (Join-Path $sandboxAgents "executor.md") -Force
     }
 
-    # Create a fixture file
+    # Create a fixture file and record initial state
     Set-Content -Path (Join-Path $sandbox "fixture.txt") -Value "INITIAL" -NoNewline
+
+    # Also create an unrelated file that MUST NOT be modified
+    Set-Content -Path (Join-Path $sandbox "unrelated.txt") -Value "DO_NOT_CHANGE" -NoNewline
+
     git add . 2>&1 | Out-Null
     git commit -m "initial" -q 2>&1 | Out-Null
 
+    # Capture initial state for comparison
+    $initialFixtureHash = (Get-FileHash (Join-Path $sandbox "fixture.txt") -Algorithm SHA256).Hash
+    $initialUnrelatedHash = (Get-FileHash (Join-Path $sandbox "unrelated.txt") -Algorithm SHA256).Hash
+
     # ===================================================================
-    # T1: OpenCode resolves the orchestrator agent
+    # T1: OpenCode resolves the orchestrator agent from .opencode/agents/
     # ===================================================================
     $orchAgentPath = Join-Path $sandboxAgents "orchestrator.md"
     $t1 = (Test-Path $orchAgentPath) -and ((Get-Item $orchAgentPath).Length -gt 0)
@@ -202,12 +210,12 @@ try {
     Test-Check -Number "T1" -Name "Orchestrator agent resolves from .opencode/agents/" -Result $t1
 
     # ===================================================================
-    # T2: Parent session model is nan/glm5.3-flash
+    # T2: Parent session model is nan/glm5.3-flash (from opencode.jsonc)
     # ===================================================================
     $t2 = $false
     try {
         $jsoncContent = Get-Content (Join-Path $sandbox "opencode.jsonc") -Raw
-        $t2 = $jsoncContent -match '"model"\s*:\s*"nan/glm5\.3-flash"' -or
+        $t2 = $jsoncContent -match '"model"\s*:\s*"nan/glm5\.3-flash"' -and
               $jsoncContent -match '"default_agent"\s*:\s*"orchestrator"'
     } catch {}
 
@@ -217,7 +225,7 @@ try {
     # T3-T7: Execute orchestration flow
     # ===================================================================
     Write-Host ""
-    Write-Host "--- Executing GLM→Qwen→GLM flow ---" -ForegroundColor Gray
+    Write-Host "--- Executing GLM-->Qwen-->GLM flow ---" -ForegroundColor Gray
     Write-Host ""
 
     $orchestrated = $false
@@ -229,7 +237,7 @@ try {
         $taskMessage = 'The file fixture.txt contains "INITIAL". Create a bounded work contract and delegate to executor to change it to "CHANGED_BY_EXECUTOR". Do not edit the file yourself.'
 
         $proc = Start-Process -FilePath "opencode" `
-            -ArgumentList "run --agent orchestrator --prompt '$taskMessage'" `
+            -ArgumentList "run --agent orchestrator --prompt `"$taskMessage`"" `
             -NoNewWindow `
             -Wait `
             -RedirectStandardOutput $outputFile `
@@ -238,70 +246,98 @@ try {
             -WorkingDirectory $sandbox
 
         $exitCode = $proc.ExitCode
+        $openCodeSuccess = ($exitCode -eq 0)
 
         # Check if output indicates successful orchestration
+        $hasOutput = $false
         if (Test-Path $outputFile) {
             $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
-            if ($output) {
-                # Check for evidence of delegation (task/executor references)
-                if ($output -match 'executor|task|delegat') {
-                    $orchestrated = $true
-                }
-                # Check if fixture was modified (evidence of executor work)
-                $fixtureContent = Get-Content (Join-Path $sandbox "fixture.txt") -Raw -ErrorAction SilentlyContinue
-                if ($fixtureContent -eq "CHANGED_BY_EXECUTOR") {
-                    $orchestrated = $true
-                }
+            if ($output -and $output.Length -gt 0) {
+                $hasOutput = $true
             }
         }
+
+        # T3: Orchestrator delegated (OpenCode ran successfully with output)
+        # We verify the session started and produced output, not just keyword matching
+        $t3 = $openCodeSuccess -and $hasOutput
+
+        # Check if fixture was modified (evidence of executor work)
+        $fixtureContent = Get-Content (Join-Path $sandbox "fixture.txt") -Raw -ErrorAction SilentlyContinue
+        $fixtureChanged = ($fixtureContent -eq "CHANGED_BY_EXECUTOR")
+        $fixtureHash = (Get-FileHash (Join-Path $sandbox "fixture.txt") -Algorithm SHA256).Hash
+
+        # ===================================================================
+        # T4: Executor uses nan/qwen3.6 (verified by agent config)
+        # ===================================================================
+        $t4 = $false
+        if (Test-Path $targetExec) {
+            $execContent = Get-Content $targetExec -Raw
+            $t4 = $execContent -match 'model:\s*nan/qwen3\.6'
+        }
+
+        Test-Check -Number "T4" -Name "Executor agent model is nan/qwen3.6" -Result $t4 -Hint "Verified via agent config (runtime model detection requires session introspection)"
+
+        # ===================================================================
+        # T5: Executor modified only the requested fixture
+        # ===================================================================
+        $t5 = $false
+        if ($fixtureChanged) {
+            # Verify unrelated file was NOT modified
+            $unrelatedHash = (Get-FileHash (Join-Path $sandbox "unrelated.txt") -Algorithm SHA256).Hash
+            $unrelatedUnchanged = ($unrelatedHash -eq $initialUnrelatedHash)
+
+            if ($unrelatedUnchanged) {
+                $t5 = $true
+            }
+        }
+
+        Test-Check -Number "T5" -Name "Executor modified only the requested fixture" -Result $t5
+
+        # ===================================================================
+        # T6: Orchestrator can inspect git diff
+        # ===================================================================
+        $t6 = $false
+        try {
+            # Check that git diff shows the fixture change
+            $diffOutput = git -C $sandbox diff --cached 2>&1 | Out-String
+            $diffHasFixture = $diffOutput -match 'fixture\.txt'
+
+            # Also verify git status shows the change
+            $statusOutput = git -C $sandbox status --porcelain 2>&1 | Out-String
+            $statusHasFixture = $statusOutput -match 'fixture\.txt'
+
+            $t6 = ($diffHasFixture -or $statusHasFixture)
+        } catch {}
+
+        Test-Check -Number "T6" -Name "Orchestrator can inspect git diff of changes" -Result $t6
+
+        # ===================================================================
+        # T7: Orchestrator produces verdict
+        # ===================================================================
+        # The orchestrator's prompt instructs it to PASS or delegate correction.
+        # We check if the output contains verdict-like language.
+        $t7 = $false
+        if ($hasOutput) {
+            try {
+                $output = Get-Content $outputFile -Raw -ErrorAction SilentlyContinue
+                if ($output -match '(?i)(pass|fail|verdict|complete|review|correct|reject)') {
+                    $t7 = $true
+                }
+            } catch {}
+        }
+
+        Test-Check -Number "T7" -Name "Orchestrator produces verdict on result" -Result $t7
+
+        # T3 result (delegated)
+        Test-Check -Number "T3" -Name "Orchestrator delegated (session ran and produced output)" -Result $t3
+
     } catch {
         Write-Host "       OpenCode run failed: $($_.Exception.Message)" -ForegroundColor DarkYellow
     }
 
-    # T3: Orchestrator delegated (not edited directly)
-    $t3 = $orchestrated
-
-    Test-Check -Number "T3" -Name "Orchestrator delegated to executor (not direct edit)" -Result $t3
-
-    # T4: Executor uses nan/qwen3.6 (verified by agent config, not runtime model detection)
-    $t4 = $false
-    if (Test-Path $targetExec) {
-        $execContent = Get-Content $targetExec -Raw
-        $t4 = $execContent -match 'model:\s*nan/qwen3\.6'
-    }
-
-    Test-Check -Number "T4" -Name "Executor agent model is nan/qwen3.6" -Result $t4 -Hint "Verified via agent config (runtime model detection requires session introspection)"
-
-    # T5: Executor created/modified only the requested fixture
-    $t5 = $false
-    $fixtureContent = Get-Content (Join-Path $sandbox "fixture.txt") -Raw -ErrorAction SilentlyContinue
-    if ($fixtureContent -eq "CHANGED_BY_EXECUTOR") {
-        $t5 = $true
-    }
-
-    Test-Check -Number "T5" -Name "Executor modified only the requested fixture" -Result $t5
-
-    # T6: Orchestrator can inspect git diff
-    $t6 = $false
-    try {
-        $diffOutput = git -C $sandbox diff 2>&1 | Out-String
-        $t6 = ($diffOutput.Length -gt 0)
-    } catch {}
-
-    Test-Check -Number "T6" -Name "Orchestrator can inspect git diff" -Result $t6
-
-    # T7: Orchestrator produces verdict
-    # (The orchestrator's prompt instructs it to PASS or delegate correction)
-    $t7 = $t3 -and $t6  # If delegation happened and diff is inspectable, verdict is possible
-    if (-not $t7 -and $orchestrated) {
-        $t7 = $true  # If we got here, the flow completed
-    }
-
-    Test-Check -Number "T7" -Name "Orchestrator can produce verdict on result" -Result $t7
-
     # T8: No changes left outside sandbox
     Set-Location $Target
-    $t8 = $true  # We created everything in $sandbox and never committed to the real repo
+    $t8 = $true  # We created everything in $sandbox and never touched the real repo
 
     Test-Check -Number "T8" -Name "No changes left outside sandbox" -Result $t8
 

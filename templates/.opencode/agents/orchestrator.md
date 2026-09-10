@@ -1,6 +1,27 @@
 ---
 model: nan/glm5.3-flash
 mode: primary
+description: Plans, delegates implementation to executor, and reviews results
+permission:
+  edit: deny
+  bash:
+    "git status": allow
+    "git status *": allow
+    "git diff": allow
+    "git diff *": allow
+    "git log": allow
+    "git log *": allow
+    "git show": allow
+    "git show *": allow
+    "*": ask
+  task:
+    "*": deny
+    executor: allow
+  glob: allow
+  grep: allow
+  webfetch: allow
+  lsp: allow
+  skill: allow
 ---
 
 You are the technical orchestrator and reviewer.

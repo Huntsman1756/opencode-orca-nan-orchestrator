@@ -21,6 +21,11 @@
 #   .env.example
 #   .orca-tools/bin/* (vendored ticket CLI)
 #   upvalue/orca cloned to .orca-local/
+#
+# Semantics:
+#   - Fresh project: install CORE (or CORE+ORCA).
+#   - Existing CORE project: -WithOrca adds Orca files only (idempotent).
+#   - Existing Orca files: abort (no overwrite).
 
 [CmdletBinding()]
 param(
@@ -42,78 +47,101 @@ Write-Host "Target : $Target" -ForegroundColor Gray
 Write-Host "Mode   : $(if ($WithOrca) { 'CORE + ORCA' } else { 'CORE' })" -ForegroundColor Gray
 Write-Host ""
 
-# ---------- fail-closed pre-check ----------
-$Forbidden = @(
+# ---------- detect existing CORE ----------
+$coreFiles = @(
     "opencode.jsonc"
     ".opencode\agents\orchestrator.md"
     ".opencode\agents\executor.md"
 )
 
-if ($WithOrca) {
-    $Forbidden += @(
-        "orca.toml"
-        "deno.json"
-        ".orca-tools\bin\ticket.cmd"
-        ".orca-local"
-        "scripts\orca-local.ps1"
-    )
-}
-
-$Existing = @()
-foreach ($f in $Forbidden) {
+$existingCore = @()
+foreach ($f in $coreFiles) {
     $path = Join-Path $Target $f
     if (Test-Path $path) {
-        $Existing += $f
+        $existingCore += $f
     }
 }
 
-if ($Existing.Count -gt 0) {
-    Write-Host "ABORT: The following files/directories already exist in $Target :" -ForegroundColor Red
-    foreach ($f in $Existing) {
+$hasExistingCore = $existingCore.Count -gt 0
+
+# ---------- fail-closed pre-check for ORCA files ----------
+$orcaForbidden = @(
+    "orca.toml"
+    "deno.json"
+    ".orca-tools\bin\ticket.cmd"
+    ".orca-local"
+    "scripts\orca-local.ps1"
+)
+
+$existingOrca = @()
+foreach ($f in $orcaForbidden) {
+    $path = Join-Path $Target $f
+    if (Test-Path $path) {
+        $existingOrca += $f
+    }
+}
+
+$hasExistingOrca = $existingOrca.Count -gt 0
+
+if ($hasExistingOrca) {
+    Write-Host "ABORT: Orca files already exist in $Target :" -ForegroundColor Red
+    foreach ($f in $existingOrca) {
         Write-Host "  - $f" -ForegroundColor Red
     }
     Write-Host ""
-    Write-Host "Remove them or choose a different -Target path. This installer does NOT overwrite existing files." -ForegroundColor Red
+    Write-Host "Orca is already installed. Do not run this installer again." -ForegroundColor Red
     exit 1
 }
 
-# ---------- create directories ----------
-Write-Host "[1/$(if ($WithOrca) { 7 } else { 3 })] Creating directories..." -ForegroundColor Yellow
+# ---------- install CORE if not present ----------
+if (-not $hasExistingCore) {
+    Write-Host "[1/$(if ($WithOrca) { 7 } else { 3 })] Creating directories..." -ForegroundColor Yellow
 
-$dirs = @(
-    ".opencode\agents"
-    "scripts"
-)
+    $dirs = @(
+        ".opencode\agents"
+        "scripts"
+    )
 
-if ($WithOrca) {
-    $dirs += @(".orca-tools\bin")
-}
+    if ($WithOrca) {
+        $dirs += @(".orca-tools\bin")
+    }
 
-foreach ($d in $dirs) {
-    $full = Join-Path $Target $d
-    if (-not (Test-Path $full)) {
-        New-Item -ItemType Directory -Path $full -Force | Out-Null
+    foreach ($d in $dirs) {
+        $full = Join-Path $Target $d
+        if (-not (Test-Path $full)) {
+            New-Item -ItemType Directory -Path $full -Force | Out-Null
+        }
+    }
+
+    Write-Host "OK" -ForegroundColor Green
+
+    Write-Host "[2/$(if ($WithOrca) { 7 } else { 3 })] Copying CORE templates..." -ForegroundColor Yellow
+
+    $templateSrc = Join-Path $KitRoot "templates"
+
+    # opencode.jsonc
+    Copy-Item (Join-Path $templateSrc "opencode.jsonc") (Join-Path $Target "opencode.jsonc") -Force
+
+    # .opencode/agents/*
+    Copy-Item (Join-Path $templateSrc ".opencode\agents\*") (Join-Path $Target ".opencode\agents") -Force
+
+    Write-Host "OK" -ForegroundColor Green
+} else {
+    Write-Host "[CORE already present (skip)]" -ForegroundColor Gray
+    # Still create Orca directories if -WithOrca
+    if ($WithOrca) {
+        $orcaBin = Join-Path $Target ".orca-tools\bin"
+        if (-not (Test-Path $orcaBin)) {
+            New-Item -ItemType Directory -Path $orcaBin -Force | Out-Null
+        }
     }
 }
-
-Write-Host "OK" -ForegroundColor Green
-
-# ---------- copy CORE templates ----------
-Write-Host "[2/$(if ($WithOrca) { 7 } else { 3 })] Copying CORE templates..." -ForegroundColor Yellow
-
-$templateSrc = Join-Path $KitRoot "templates"
-
-# opencode.jsonc
-Copy-Item (Join-Path $templateSrc "opencode.jsonc") (Join-Path $Target "opencode.jsonc") -Force
-
-# .opencode/agents/*
-Copy-Item (Join-Path $templateSrc ".opencode\agents\*") (Join-Path $Target ".opencode\agents") -Force
-
-Write-Host "OK" -ForegroundColor Green
 
 # ---------- Orca mode (optional) ----------
 if ($WithOrca) {
     Write-Host "[3/7] Copying Orca templates..." -ForegroundColor Yellow
+
+    $templateSrc = Join-Path $KitRoot "templates"
 
     # orca.toml
     Copy-Item (Join-Path $templateSrc "orca.toml") (Join-Path $Target "orca.toml") -Force
@@ -182,10 +210,8 @@ if ($WithOrca) {
     $orcaCommit = "35938cc8aa328853333bd171d474c300b4c09251"
 
     $orcaCloned = $false
-    $hasGit = $false
 
     if (Get-Command git -ErrorAction SilentlyContinue) {
-        $hasGit = $true
         try {
             git clone $orcaUrl $orcaLocal 2>&1 | Out-Null
             git -C $orcaLocal checkout $orcaCommit 2>&1 | Out-Null
@@ -243,9 +269,11 @@ if ($WithOrca) {
     Write-Host "  2. The default agent is 'orchestrator' (nan/glm5.3-flash)."
     Write-Host "  3. The orchestrator delegates implementation to 'executor' (nan/qwen3.6)."
     Write-Host ""
-    Write-Host "Optional: To enable ticket-driven autonomous mode:"
-    Write-Host "  .\scripts\install.ps1 -Target $(Resolve-Path $Target) -WithOrca"
-    Write-Host ""
+    if (-not $hasExistingCore) {
+        Write-Host "Optional: To enable ticket-driven autonomous mode:"
+        Write-Host "  .\scripts\install.ps1 -Target $(Resolve-Path $Target) -WithOrca"
+        Write-Host ""
+    }
     Write-Host "Then run:"
     Write-Host "  .\scripts\verify.ps1 -Target $(Resolve-Path $Target)"
     Write-Host ""

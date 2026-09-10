@@ -8,7 +8,8 @@
 #
 # Checks:
 #   1-5: Core config validation (always)
-#   6-9: Orca mode (only if orca.toml exists)
+#   6-9: Permission enforcement on agents (always)
+#  10-13: Orca mode (only if orca.toml exists)
 #
 # Exit codes:
 #   0  - all relevant checks passed
@@ -21,7 +22,7 @@ param(
 
 $Target = (Resolve-Path -Path $Target -ErrorAction Stop | Select-Object -First 1).Path
 
-# Use a script-scoped hashtable for counters (PowerShell function scope isolation fix)
+# Use a script-scoped hashtable for counters
 $script:results = @{
     passCount = 0
     failCount = 0
@@ -61,26 +62,18 @@ $check1 = Test-Path $opencodePath
 Test-Check -Number 1 -Name "opencode.jsonc exists" -Result $check1
 
 # ---------------------------------------------------------------------------
-# Check 2: opencode.jsonc has expected top-level keys (no agent duplication)
+# Check 2: opencode.jsonc has expected top-level keys
 # ---------------------------------------------------------------------------
 $check2 = $false
 
 if ($check1) {
     $content = Get-Content $opencodePath -Raw
 
-    # Must have default_agent=orchestrator
     $hasDefault = $content -match '"default_agent"\s*:\s*"orchestrator"'
-
-    # Must have model = nan/glm5.3-flash
-    $hasModel = $content -match '"model"\s*:\s*"nan/glm5\.3-flash"'
-
-    # Must NOT have prompt_file anywhere
+    $hasModel   = $content -match '"model"\s*:\s*"nan/glm5\.3-flash"'
     $hasPromptFile = $content -match 'prompt_file'
 
-    # Should NOT have full agent definitions with prompt_file (duplicated config)
-    $hasAgentDup = $content -match '"orchestrator"\s*:\s*\{' -and $content -match 'prompt_file'
-
-    $check2 = $hasDefault -and $hasModel -and (-not $hasPromptFile) -and (-not $hasAgentDup)
+    $check2 = $hasDefault -and $hasModel -and (-not $hasPromptFile)
 }
 
 Test-Check -Number 2 -Name "opencode.jsonc: default_agent=orchestrator, model=nan/glm5.3-flash, no prompt_file" -Result $check2
@@ -93,10 +86,10 @@ $check3 = $false
 if ($check1) {
     $content = Get-Content $opencodePath -Raw
 
-    $hasBuildDisable = $content -match '"build"' -and ($content -match '"build"\s*:\s*\{[^}]*"disable"\s*:\s*true')
-    $hasPlanDisable = $content -match '"plan"' -and ($content -match '"plan"\s*:\s*\{[^}]*"disable"\s*:\s*true')
-    $hasGeneralDisable = $content -match '"general"' -and ($content -match '"general"\s*:\s*\{[^}]*"disable"\s*:\s*true')
-    $hasExploreDisable = $content -match '"explore"' -and ($content -match '"explore"\s*:\s*\{[^}]*"disable"\s*:\s*true')
+    $hasBuildDisable = $content -match '"build"\s*:\s*\{[^}]*"disable"\s*:\s*true'
+    $hasPlanDisable  = $content -match '"plan"\s*:\s*\{[^}]*"disable"\s*:\s*true'
+    $hasGeneralDisable = $content -match '"general"\s*:\s*\{[^}]*"disable"\s*:\s*true'
+    $hasExploreDisable = $content -match '"explore"\s*:\s*\{[^}]*"disable"\s*:\s*true'
 
     $check3 = $hasBuildDisable -and $hasPlanDisable -and $hasGeneralDisable -and $hasExploreDisable
 }
@@ -113,26 +106,26 @@ $check4a = (Test-Path $orchPath) -and ((Get-Item $orchPath).Length -gt 0)
 $check4b = (Test-Path $execPath) -and ((Get-Item $execPath).Length -gt 0)
 
 Test-Check -Number 4a -Name "orchestrator.md exists and is non-empty" -Result $check4a
-
 Test-Check -Number 4b -Name "executor.md exists and is non-empty" -Result $check4b
 
 # ---------------------------------------------------------------------------
-# Check 5: Agent frontmatter validation
+# Check 5: Agent frontmatter - models, modes, descriptions
 # ---------------------------------------------------------------------------
-$check5a = $false  # orchestrator frontmatter
-$check5b = $false  # executor frontmatter
+$check5a = $false  # orchestrator has YAML frontmatter
+$check5b = $false  # executor has YAML frontmatter
 $check5c = $false  # orchestrator model
 $check5d = $false  # executor model
 $check5e = $false  # orchestrator mode=primary
 $check5f = $false  # executor mode=subagent
-$check5g = $false  # orchestrator no edit
+$check5g = $false  # orchestrator has description
+$check5h = $false  # executor has description
 
 if (Test-Path $orchPath) {
     $orchContent = Get-Content $orchPath -Raw
     $check5a = $orchContent -match '^---[\r\n]'
     $check5c = $orchContent -match 'model:\s*nan/glm5\.3-flash'
     $check5e = $orchContent -match 'mode:\s*primary'
-    $check5g = $true  # edit is denied by opencode.jsonc permission, not agent frontmatter
+    $check5g = $orchContent -match 'description:'
 }
 
 if (Test-Path $execPath) {
@@ -140,40 +133,63 @@ if (Test-Path $execPath) {
     $check5b = $execContent -match '^---[\r\n]'
     $check5d = $execContent -match 'model:\s*nan/qwen3\.6'
     $check5f = $execContent -match 'mode:\s*subagent'
+    $check5h = $execContent -match 'description:'
 }
 
-$check5Result = $check5a -and $check5b -and $check5c -and $check5d -and $check5e -and $check5f
-
-Test-Check -Number 5 -Name "Agent frontmatter: models and modes correct" -Result $check5Result
+Test-Check -Number 5a -Name "Orchestrator frontmatter: model=nan/glm5.3-flash, mode=primary" -Result ($check5a -and $check5c -and $check5e -and $check5g)
+Test-Check -Number 5b -Name "Executor frontmatter: model=nan/qwen3.6, mode=subagent" -Result ($check5b -and $check5d -and $check5f -and $check5h)
 
 # ---------------------------------------------------------------------------
-# Check 6: Orchestrator cannot edit (permission check)
+# Check 6: Orchestrator permissions - edit must be explicitly denied
 # ---------------------------------------------------------------------------
-$check6 = $false
+$check6a = $false  # orchestrator has permission block
+$check6b = $false  # orchestrator edit: deny present
+$check6c = $false  # orchestrator task restricted to executor only
 
-if ($check1) {
-    $content = Get-Content $opencodePath -Raw
-    # Check that if "orchestrator" appears in agent block, edit is denied
-    # Since we use .md agents without JSON agent config, we rely on the fact
-    # that orchestrator has NO agent definition in opencode.jsonc (it's in .md)
-    # This is correct: the orchestrator uses default permissions.
-    # We verify that there is NO "orchestrator" agent entry with edit:allow
-    $orchAgentBlock = $content | Select-String -Pattern '"orchestrator"' -AllMatches
-    if ($orchAgentBlock.Count -eq 0) {
-        # No orchestrator in JSON config = uses default = acceptable
-        $check6 = $true
+if (Test-Path $orchPath) {
+    $orchContent = Get-Content $orchPath -Raw
+    $check6a = $orchContent -match 'permission:'
+    $check6b = $orchContent -match 'edit:\s*deny'
+
+    # Check task: verify executor is in allowlist and there's a deny/ask wildcard
+    if ($orchContent -match 'task:') {
+        $hasTaskExecutorAllow = $orchContent -match 'executor:\s*allow'
+        $hasTaskWildcardDeny = $orchContent -match ':\s*\*\s*:\s*(?:deny|ask)' -or $orchContent -match ':\s*"\*"\s*:\s*(?:deny|ask)'
+        $check6c = $hasTaskExecutorAllow -and $hasTaskWildcardDeny
     } else {
-        # Check that edit is not allowed if orchestrator is defined in JSON
-        $check6 = -not ($content -match '"orchestrator"[^}]*"edit"\s*:\s*"allow"')
+        $check6c = $false
     }
 }
 
-Test-Check -Number 6 -Name "Orchestrator cannot edit (no edit:allow in config)" -Result $check6
+Test-Check -Number 6a -Name "Orchestrator has explicit permission block" -Result $check6a
+Test-Check -Number 6b -Name "Orchestrator: edit explicitly denied" -Result $check6b
+Test-Check -Number 6c -Name "Orchestrator: task delegation restricted to executor only" -Result $check6c
 
 # ---------------------------------------------------------------------------
-# Check 7: No prompt_file anywhere in the project config
+# Check 7: Executor permissions - task must be explicitly denied
 # ---------------------------------------------------------------------------
-$check7 = $true
+$check7a = $false  # executor has permission block
+$check7b = $false  # executor task: deny present
+$check7c = $false  # executor webfetch: deny
+$check7d = $false  # executor skill: deny
+
+if (Test-Path $execPath) {
+    $execContent = Get-Content $execPath -Raw
+    $check7a = $execContent -match 'permission:'
+    $check7b = $execContent -match 'task:\s*deny'
+    $check7c = $execContent -match 'webfetch:\s*deny'
+    $check7d = $execContent -match 'skill:\s*deny'
+}
+
+Test-Check -Number 7a -Name "Executor has explicit permission block" -Result $check7a
+Test-Check -Number 7b -Name "Executor: task explicitly denied" -Result $check7b
+Test-Check -Number 7c -Name "Executor: webfetch denied" -Result $check7c
+Test-Check -Number 7d -Name "Executor: skill denied" -Result $check7d
+
+# ---------------------------------------------------------------------------
+# Check 8: No prompt_file anywhere in project config
+# ---------------------------------------------------------------------------
+$check8 = $true
 
 $configFiles = @(
     (Join-Path -Path $Target -ChildPath "opencode.jsonc"),
@@ -186,37 +202,32 @@ foreach ($cf in $configFiles) {
     if (Test-Path $cf) {
         $cfContent = Get-Content $cf -Raw
         if ($cfContent -match 'prompt_file') {
-            $check7 = $false
+            $check8 = $false
             break
         }
     }
 }
 
-Test-Check -Number 7 -Name "No prompt_file in any config file" -Result $check7
+Test-Check -Number 8 -Name "No prompt_file in any config file" -Result $check8
 
 # ---------------------------------------------------------------------------
-# Check 8: Executor can edit (implicit - agent runs in project context)
-# Check 9: Executor cannot delegate tasks
+# Check 9: No agent definition in JSON that duplicates .md frontmatter
 # ---------------------------------------------------------------------------
-# These are enforced at runtime by OpenCode's agent system.
-# The executor.md has no "task" permission in its implicit config.
-# We verify the agent file doesn't request task delegation.
+# If both opencode.jsonc defines an agent AND that agent has a .md file,
+# it creates ambiguity. We only allow .md files to define agents.
+$check9 = $true
 
-$check8a = $true  # executor.md exists (verified in check 4b)
-$check8b = $true  # executor is subagent (verified in check 5f)
-
-# Check executor.md doesn't contain task delegation instructions
-if (Test-Path $execPath) {
-    $execContent = Get-Content $execPath -Raw
-    # Check for explicit delegation/child-session commands (not prose references to "task")
-    if ($execContent -match '(?m)^\s*task\s*:' -or $execContent -match 'spawn.*agent' -or $execContent -match 'start.*subsession' -or $execContent -match 'invoke.*agent') {
-        $check8b = $false
+if ($check1) {
+    $jsonContent = Get-Content $opencodePath -Raw
+    if ($jsonContent -match '"orchestrator"\s*:\s*\{') {
+        # Check if this JSON orchestrator has a prompt_file (old pattern)
+        if ($jsonContent -match '"orchestrator"[^}]*prompt_file') {
+            $check9 = $false
+        }
     }
 }
 
-Test-Check -Number 8a -Name "Executor is subagent mode" -Result $check8a
-
-Test-Check -Number 8b -Name "Executor does not delegate to other agents" -Result $check8b
+Test-Check -Number 9 -Name "No agent duplication between JSON and .md" -Result $check9
 
 # ---------------------------------------------------------------------------
 # ORCA MODE checks (only if orca.toml exists)
@@ -229,39 +240,39 @@ if ($hasOrca) {
     Write-Host "--- Orca mode detected ---" -ForegroundColor Magenta
     Write-Host ""
 
-    # Check 9: orca.toml exists with required stages
-    $check9 = $false
+    # Check 10: orca.toml exists with required stages
+    $check10 = $false
     $orcaContent = Get-Content $orcaPath -Raw
     $hasReview = $orcaContent -match 'name\s*=\s*"review"'
     $hasWork = $orcaContent -match 'name\s*=\s*"work"'
     $hasPlan = $orcaContent -match 'name\s*=\s*"plan"'
-    $check9 = $hasReview -and $hasWork -and $hasPlan
+    $check10 = $hasReview -and $hasWork -and $hasPlan
 
-    Test-Check -Number 9 -Name "orca.toml exists with stages review, work, plan" -Result $check9
+    Test-Check -Number 10 -Name "orca.toml exists with stages review, work, plan" -Result $check10
 
-    # Check 10: deno.json has orca tasks
+    # Check 11: deno.json has orca tasks
     $denoPath = Join-Path $Target "deno.json"
-    $check10 = $false
+    $check11 = $false
 
     if (Test-Path $denoPath) {
         $denoContent = Get-Content $denoPath -Raw
-        $check10 = $denoContent -match '"orca"'
+        $check11 = $denoContent -match '"orca"'
     }
 
-    Test-Check -Number 10 -Name "deno.json has orca tasks" -Result $check10
+    Test-Check -Number 11 -Name "deno.json has orca tasks" -Result $check11
 
-    # Check 11: ticket CLI files exist
+    # Check 12: ticket CLI files exist
     $ticketCmd = Join-Path $Target ".orca-tools\bin\ticket.cmd"
     $ticketSh = Join-Path $Target ".orca-tools\bin\ticket.sh"
-    $check11 = (Test-Path $ticketCmd) -and (Test-Path $ticketSh)
+    $check12 = (Test-Path $ticketCmd) -and (Test-Path $ticketSh)
 
-    Test-Check -Number 11 -Name "Ticket CLI files present" -Result $check11
+    Test-Check -Number 12 -Name "Ticket CLI files present" -Result $check12
 
-    # Check 12: .orca-local is a git repo with correct HEAD
+    # Check 13: .orca-local is a git repo with correct HEAD
     $orcaLocal = Join-Path $Target ".orca-local"
     $expectedCommit = "35938cc8aa328853333bd171d474c300b4c09251"
-    $check12Result = $false
-    $check12Hint = ""
+    $check13Result = $false
+    $check13Hint = ""
 
     if (Test-Path $orcaLocal) {
         $gitHeadPath = Join-Path $orcaLocal ".git"
@@ -270,21 +281,21 @@ if ($hasOrca) {
                 $headCommit = git -C $orcaLocal rev-parse HEAD 2>&1 | Out-String
                 $headCommit = $headCommit.Trim()
                 if ($headCommit -eq $expectedCommit) {
-                    $check12Result = $true
+                    $check13Result = $true
                 } else {
-                    $check12Hint = "Expected HEAD=$expectedCommit but HEAD=$headCommit"
+                    $check13Hint = "Expected HEAD=$expectedCommit but HEAD=$headCommit"
                 }
             } catch {
-                $check12Hint = "Failed to read git HEAD: $_"
+                $check13Hint = "Failed to read git HEAD: $_"
             }
         } else {
-            $check12Hint = ".orca-local exists but is not a git repo"
+            $check13Hint = ".orca-local exists but is not a git repo"
         }
     } else {
-        $check12Hint = ".orca-local not found. Manual clone: git clone https://github.com/upvalue/orca.git $Target\.orca-local"
+        $check13Hint = ".orca-local not found. Manual clone: git clone https://github.com/upvalue/orca.git $Target\.orca-local"
     }
 
-    Test-Check -Number 12 -Name ".orca-local git repo with pinned commit" -Result $check12Result -Hint $check12Hint
+    Test-Check -Number 13 -Name ".orca-local git repo with pinned commit" -Result $check13Result -Hint $check13Hint
 }
 
 # ---------------------------------------------------------------------------
