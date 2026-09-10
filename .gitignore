@@ -6,6 +6,3 @@
 .orca-local/
 .orca-tools/
 .opencode/node_modules/
-
-# Dotenv files (never committed)
-.env

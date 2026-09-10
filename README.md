@@ -1,60 +1,99 @@
-# OpenCode + Orca Nanite Orchestrator Kit
+# OpenCode Orchestrator Kit
 
-A reusable kit for setting up a two-agent orchestration workflow powered by [OpenCode](https://opencode.ai) and [Orca](https://github.com/upvalue/orca).
+A minimal two-agent orchestration kit powered by [OpenCode](https://opencode.ai) with NaN models.
 
 ## Architecture
 
 ```
-Orca (orca.toml) ──► OpenCode server ──► orchestrator (glm5.3-flash, read-only)
-                                              │
-                                              ▼
-                                        executor (qwen3.6, code via bounded contracts)
+OpenCode
+├── orchestrator → nan/glm5.3-flash  (plans, delegates, reviews)
+└── executor     → nan/qwen3.6       (implements bounded contracts)
 ```
 
-- **Orca** is the ticket-driven agent orchestrator. It reads `orca.toml` stages and dispatches work based on ticket tags.
-- **OpenCode** is the agent runtime with a JSON config (`opencode.jsonc`) defining models, permissions and prompts.
-- **orchestrator** (GLM 5.3 Flash) handles planning, decomposition, verification and delegation. It has **read-only** access to implementation files.
-- **executor** (Qwen 3.6) writes code and tests only under bounded work contracts delegated by the orchestrator.
+**GLM plans → Qwen implements → GLM verifies.**
+
+OpenCode provides native parent→subagent orchestration. The orchestrator (GLM 5.3 Flash) handles planning, decomposition, verification and delegation. The executor (Qwen 3.6) implements bounded work contracts.
 
 ## Requirements
 
-- **OpenCode** with NaN provider configured, exposing models:
+- **OpenCode** installed with NaN provider configured, exposing:
   - `nan/glm5.3-flash`
   - `nan/qwen3.6`
-- **Deno** 2.x
-- **Git for Windows** (must include `bash` at `C:\Program Files\Git\usr\bin\bash.exe`)
-- **jq** (used by the ticket query plugin)
+
+That is all. No Deno. No jq. No ticket CLI. No external dependencies.
 
 ## Quick Start
 
 ```powershell
-# Install the kit into a consuming project
+# 1. Install the kit into a consuming project
 .\scripts\install.ps1 -Target G:\_Proyectos\MiProyecto
 
-# Verify the installation
+# 2. Verify the installation
 .\scripts\verify.ps1 -Target G:\_Proyectos\MiProyecto
+
+# 3. Start OpenCode
+opencode
 ```
 
-## What Gets Installed
+The default agent is `orchestrator` (nan/glm5.3-flash).
 
-| Kit source                     | Target location                          |
-|-------------------------------|------------------------------------------|
-| `templates/opencode.jsonc`    | `<project>/opencode.jsonc`               |
-| `templates/orca.toml`         | `<project>/orca.toml`                    |
-| `templates/deno.json`         | `<project>/deno.json`                    |
-| `templates/orca-local.ps1`    | `<project>/scripts/orca-local.ps1`       |
-| `templates/env.example`       | `<project>/.env.example`                 |
-| `templates/.opencode/agents/*`| `<project>/.opencode/agents/*`           |
-| `vendored/ticket/bin/*`       | `<project>/.orca-tools/bin/*`            |
-| `vendor-config/orca.version`  | (used by install to record clone target) |
-| (cloned) upvalue/orca         | `<project>/.orca-local/`                 |
+## What Gets Installed (CORE)
+
+| Kit source                        | Target location                 |
+|-----------------------------------|---------------------------------|
+| `templates/opencode.jsonc`        | `<project>/opencode.jsonc`      |
+| `templates/.opencode/agents/*`    | `<project>/.opencode/agents/*`  |
+| (append)                          | `<project>/.gitignore`          |
 
 ## License Notes
 
-- **This kit** is private/all-rights-reserved. No `LICENSE` file is included intentionally — the kit is a configuration scaffold, not redistributable code.
-- **ticket** CLI (vendored in `vendored/ticket/`) is licensed under MIT by the wedow/ticket contributors. See `vendored/ticket/LICENSE` for full text. Modifications for Windows compatibility are documented there.
-- **orca** (`upvalue/orca`) is upstream UNLICENSED. It is cloned at install time from the pinned commit; its source is never redistributed by this kit.
+- **This kit** is private/all-rights-reserved. No `LICENSE` file is included intentionally.
 
 ## Documentation
 
-See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for workflow tags, manual bootstrap steps and integration notes.
+See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for workflow details and integration notes.
+
+---
+
+## Optional: Orca Ticket Mode
+
+Orca adds persistent autonomous ticket-driven processing on top of the CORE kit. It requires Deno and is **not installed by default**.
+
+### Install with Orca
+
+```powershell
+.\scripts\install.ps1 -Target G:\_Proyectos\MiProyecto -WithOrca
+```
+
+This additionally installs:
+
+| Kit source                         | Target location                      |
+|------------------------------------|--------------------------------------|
+| `templates/orca.toml`              | `<project>/orca.toml`                |
+| `templates/deno.json`              | `<project>/deno.json`                |
+| `templates/orca-local.ps1`         | `<project>/scripts/orca-local.ps1`   |
+| `templates/env.example`            | `<project>/.env.example`             |
+| `vendored/ticket/bin/*`            | `<project>/.orca-tools/bin/*`        |
+| `vendor-config/orca.version`       | (pinned commit reference)            |
+| (cloned) upvalue/orca              | `<project>/.orca-local/`             |
+
+### Requirements for Orca mode
+
+- **Deno** 2.x
+- **Git** (for cloning upvalue/orca)
+- **jq** (for ticket query filtering, optional but recommended)
+
+### Using Orca
+
+```powershell
+# Plan mode (dry-run)
+deno task orca:plan
+
+# Interactive loop
+deno task orca
+
+# Or via launcher script
+.\scripts\orca-local.ps1
+```
+
+See [`docs/INTEGRATION.md`](docs/INTEGRATION.md) for workflow tags, ticket lifecycle and integration notes.
