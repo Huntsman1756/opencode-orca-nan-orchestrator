@@ -14,6 +14,8 @@ OpenCode
 
 OpenCode provides native parent→subagent orchestration. The orchestrator (GLM 5.3 Flash) handles planning, decomposition, verification and delegation. The executor (Qwen 3.6) implements bounded work contracts.
 
+The executor has unrestricted `bash`/Git permissions. Scope control comes from the bounded work contract and orchestrator review, not command-level Git deny rules.
+
 ## Requirements
 
 - **OpenCode** installed with NaN provider configured, exposing:
