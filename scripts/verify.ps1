@@ -187,23 +187,23 @@ Test-Check -Number 7c -Name "Executor: webfetch denied" -Result $check7c
 Test-Check -Number 7d -Name "Executor: skill denied" -Result $check7d
 
 # Check 7e-7h: Executor has unrestricted bash/Git access.
-# Git operations are intentionally not singled out for deny rules.
+# Git operations are intentionally not singled out for deny/ask rules.
 $check7e = $false  # executor has bash block
 $check7f = $false  # bash wildcard allow present
-$check7g = $false  # no git-specific deny rule
+$check7g = $false  # no git-specific deny/ask rule
 $check7h = $false  # no prompt-level push/merge prohibition
 
 if (Test-Path $execPath) {
     $execContent = Get-Content $execPath -Raw
     $check7e = $execContent -match 'bash:'
     $check7f = $execContent -match '"\*"\s*:\s*allow'
-    $check7g = -not ($execContent -match '"git [^"]*"\s*:\s*deny')
+    $check7g = -not ($execContent -match '"git [^"]*"\s*:\s*(?:deny|ask)')
     $check7h = -not ($execContent -match '(?i)push or merge code')
 }
 
 Test-Check -Number 7e -Name "Executor has explicit bash block" -Result $check7e
 Test-Check -Number 7f -Name "Executor: bash wildcard allowed" -Result $check7f
-Test-Check -Number 7g -Name "Executor: no git-specific deny rules" -Result $check7g
+Test-Check -Number 7g -Name "Executor: no git-specific deny/ask rules" -Result $check7g
 Test-Check -Number 7h -Name "Executor: no prompt-level push/merge prohibition" -Result $check7h
 
 # ---------------------------------------------------------------------------
