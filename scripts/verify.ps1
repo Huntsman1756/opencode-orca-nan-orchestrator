@@ -186,50 +186,25 @@ Test-Check -Number 7b -Name "Executor: task explicitly denied" -Result $check7b
 Test-Check -Number 7c -Name "Executor: webfetch denied" -Result $check7c
 Test-Check -Number 7d -Name "Executor: skill denied" -Result $check7d
 
-# Check 7e-7h: Executor bash deny git-mutator commands
-# The executor has bash:allow for tests but must deny git push/commit/merge/rebase/reset/clean.
-# OpenCode uses last-match-wins: wildcards must come before specific denies.
-$check7e = $false  # executor has bash block at all
-$check7f = $false  # has "*": allow before specific denies (last-match-wins)
-$check7g = $false  # has specific git denies
-$check7h = $false  # deny commands present: push, commit, merge
+# Check 7e-7h: Executor has unrestricted bash/Git access.
+# Git operations are intentionally not singled out for deny/ask rules.
+$check7e = $false  # executor has bash block
+$check7f = $false  # bash wildcard allow present
+$check7g = $false  # no git-specific deny/ask rule
+$check7h = $false  # no prompt-level push/merge prohibition
 
 if (Test-Path $execPath) {
     $execContent = Get-Content $execPath -Raw
     $check7e = $execContent -match 'bash:'
-
-    if ($check7e) {
-        # Check wildcard comes before specific rules (last-match-wins)
-        $posAsterisk = $execContent.IndexOf('"*": allow')
-        $posGitPush = $execContent.IndexOf('"git push*": deny')
-        $posGitCommit = $execContent.IndexOf('"git commit*": deny')
-        $posGitMerge = $execContent.IndexOf('"git merge*": deny')
-        $posGitRebase = $execContent.IndexOf('"git rebase*": deny')
-        $posGitReset = $execContent.IndexOf('"git reset*": deny')
-        $posGitClean = $execContent.IndexOf('"git clean*": deny')
-
-        if ($posAsterisk -ge 0) {
-            $check7f = $true
-            $hasGitDenies = ($posGitPush -ge 0) -and ($posGitCommit -ge 0) -and
-                            ($posGitMerge -ge 0) -and ($posGitRebase -ge 0) -and
-                            ($posGitReset -ge 0) -and ($posGitClean -ge 0)
-            # Each specific deny must come AFTER the wildcard
-            $check7g = $hasGitDenies -and
-                       ($posGitPush -gt $posAsterisk) -and
-                       ($posGitCommit -gt $posAsterisk) -and
-                       ($posGitMerge -gt $posAsterisk) -and
-                       ($posGitRebase -gt $posAsterisk) -and
-                       ($posGitReset -gt $posAsterisk) -and
-                       ($posGitClean -gt $posAsterisk)
-            $check7h = $hasGitDenies
-        }
-    }
+    $check7f = $execContent -match '"\*"\s*:\s*allow'
+    $check7g = -not ($execContent -match '"git [^"]*"\s*:\s*(?:deny|ask)')
+    $check7h = -not ($execContent -match '(?i)push or merge code')
 }
 
 Test-Check -Number 7e -Name "Executor has explicit bash block" -Result $check7e
-Test-Check -Number 7f -Name "Executor: wildcard before git denies (last-match-wins)" -Result $check7f
-Test-Check -Number 7g -Name "Executor: git push deny present" -Result $check7g
-Test-Check -Number 7h -Name "Executor: all 6 git-mutator commands denied (push/commit/merge/rebase/reset/clean)" -Result $check7h
+Test-Check -Number 7f -Name "Executor: bash wildcard allowed" -Result $check7f
+Test-Check -Number 7g -Name "Executor: no git-specific deny/ask rules" -Result $check7g
+Test-Check -Number 7h -Name "Executor: no prompt-level push/merge prohibition" -Result $check7h
 
 # ---------------------------------------------------------------------------
 # Check 8: No prompt_file anywhere in project config

@@ -7,12 +7,6 @@ permission:
   read: allow
   bash:
     "*": allow
-    "git push*": deny
-    "git commit*": deny
-    "git merge*": deny
-    "git rebase*": deny
-    "git reset*": deny
-    "git clean*": deny
   task: deny
   glob: allow
   grep: allow
@@ -42,7 +36,6 @@ You must not:
 * substitute official evidence with synthetic evidence;
 * hide failing tests;
 * silently resolve ambiguities;
-* push or merge code;
 * delegate to another agent.
 
 If the work contract is ambiguous, contradictory or impossible:
